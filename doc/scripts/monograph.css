@@ -1,0 +1,99 @@
+/* Styling for the Pandoc HTML build of the DownstreamDOE monograph.
+   The call-out <div>s (appbox, limitbox, ...) are emitted by Pandoc from the
+   matching LaTeX tcolorbox environments; the title text is preserved inside. */
+
+:root {
+  --accent:  #1f4e79;
+  --appcol:  #2c7a39;
+  --limcol:  #b23a2e;
+  --datcol:  #8a6d1b;
+  --keycol:  #1f4e79;
+}
+
+html { font-size: 18px; }
+body {
+  max-width: 46rem;
+  margin: 2rem auto;
+  padding: 0 1.25rem 4rem;
+  font-family: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  line-height: 1.6;
+  color: #1a1a1a;
+  background: #fdfdfb;
+}
+
+h1, h2, h3, h4 { font-family: "Helvetica Neue", Arial, sans-serif; line-height: 1.25; }
+h1 { color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: .3rem; margin-top: 2.5rem; }
+h2 { color: var(--accent); margin-top: 2rem; }
+h3 { color: #333; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+blockquote {
+  border-left: 3px solid var(--accent);
+  margin-left: 0; padding-left: 1rem;
+  color: #555; font-style: italic;
+}
+
+figure { margin: 1.5rem auto; text-align: center; }
+figure img { max-width: 100%; height: auto; border: 1px solid #eee; border-radius: 4px; }
+figcaption { font-size: .85rem; color: #555; margin-top: .4rem; text-align: left; }
+
+table { border-collapse: collapse; margin: 1.2rem auto; font-size: .92rem; }
+th, td { padding: .4rem .7rem; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
+thead th { border-bottom: 2px solid #333; }
+
+code, .verbatim { font-family: "SFMono-Regular", Consolas, monospace; font-size: .9em;
+                  background: #f3f3ef; padding: .1em .3em; border-radius: 3px; }
+
+/* Table of contents */
+#TOC { background: #f6f6f2; border: 1px solid #e3e3dc; border-radius: 6px;
+       padding: 1rem 1.5rem; font-family: "Helvetica Neue", Arial, sans-serif;
+       font-size: .92rem; }
+#TOC ul { list-style: none; padding-left: 1rem; }
+
+/* ---- Call-out boxes -------------------------------------------------------
+   Pandoc renders the first <span> in each box as the tcolorbox title text. */
+div.appbox, div.limitbox, div.databox, div.keybox, div.prosbox, div.consbox {
+  border-radius: 6px;
+  padding: .9rem 1.1rem;
+  margin: 1.4rem 0;
+  border-left: 5px solid var(--accent);
+  background: #f5f8fb;
+}
+div.appbox   { border-left-color: var(--appcol); background: #f1f8f2; }
+div.limitbox { border-left-color: var(--limcol); background: #fbf2f0; }
+div.databox  { border-left-color: var(--datcol); background: #faf6ea; }
+div.keybox   { border-left-color: var(--keycol); background: #eef4fa; }
+div.prosbox  { border-left-color: var(--appcol); background: #f1f8f2; }
+div.consbox  { border-left-color: var(--limcol); background: #fbf2f0; }
+
+/* The leading title span gets bold, coloured treatment. */
+div.appbox   > p:first-child > span:first-child,
+div.limitbox > p:first-child > span:first-child,
+div.databox  > p:first-child > span:first-child,
+div.keybox   > p:first-child > span:first-child,
+div.prosbox  > p:first-child > span:first-child,
+div.consbox  > p:first-child > span:first-child {
+  display: block;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-weight: 700;
+  margin-bottom: .4rem;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  font-size: .85rem;
+  color: var(--accent);
+}
+div.appbox  > p:first-child > span:first-child { color: var(--appcol); }
+div.limitbox> p:first-child > span:first-child { color: var(--limcol); }
+div.databox > p:first-child > span:first-child { color: var(--datcol); }
+div.consbox > p:first-child > span:first-child { color: var(--limcol); }
+
+/* Restore the kind-of-box label that the LaTeX tcolorbox carries in its title
+   prefix (Pandoc only keeps the per-instance argument, so re-add the prefix
+   here to keep the HTML and PDF wording identical). keybox needs no prefix. */
+div.appbox   > p:first-child > span:first-child::before { content: "Real-world application: "; }
+div.limitbox > p:first-child > span:first-child::before { content: "Limitations & assumptions: "; }
+div.databox  > p:first-child > span:first-child::before { content: "Calibration data & experiments: "; }
+div.prosbox  > p:first-child > span:first-child::before { content: "Strengths: "; }
+div.consbox  > p:first-child > span:first-child::before { content: "Weaknesses: "; }

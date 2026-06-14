@@ -13,10 +13,12 @@ dependencies = [
     "statsmodels>=0.14",
     "emcee>=3.1",
     "arviz>=0.18",
+    "pyfvtool",
 ]
 
 [dependency-groups]
 dev = [
+    "nbconvert>=7.17.1",
     "pytest>=8.0",
 ]
 
@@ -26,3 +28,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/downstream_doe"]
+
+[tool.uv.sources]
+pyfvtool = { git = "https://github.com/FiniteVolumeTransportPhenomena/PyFVTool.git" }

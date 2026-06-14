@@ -12,7 +12,7 @@ The workflow mirrors a real **QbD / process-characterization** campaign: define 
 
 | Domain | Module | Capability |
 |---|---|---|
-| **Mechanistic models** | `models/chromatography.py` | Equilibrium-Dispersive column model with a linearised Steric-Mass-Action (SMA) isotherm; salt & pH enter as physical CPPs. Method-of-lines + stiff BDF integration. Computes outlet chromatograms and **yield / purity / productivity** pool metrics. |
+| **Mechanistic models** | `models/chromatography/` | Multi-mode column engine: **cation/anion exchange (CEX/AEX), HIC salting-out, RP-HPLC**, and nonlinear high-resolution IEX — one transport-dispersive (LDF) solver, mode set by the isotherm law. Multi-component, with **linear-gradient elution** and overload; computes chromatograms, **yield/purity/productivity**, resolution & plate count. The original single-component isocratic model is retained for backward compatibility. |
 | | `models/ufdf.py` | Ultrafiltration/diafiltration with a combined pressure-limited + gel-polarisation flux model; cross-flow velocity is a physical CPP. Mass-balance ODEs for the UF (concentrating) and DF (buffer-exchange) phases. |
 | **Virtual experiments** | `perturbation.py` | Turns model output into realistic measurements: multiplicative + additive noise, drift, and calibration bias, plus lognormal batch-to-batch parameter jitter. |
 | **Classical DoE** | `doe/factorial.py` | 2-level full-factorial designs with center points and randomised run order; a harness to run any design against the virtual lab. |
@@ -36,7 +36,7 @@ DownstreamDOE targets **Python ≥ 3.13** and uses [`uv`](https://docs.astral.sh
 ```bash
 # clone, then from the repo root:
 uv sync                 # create the env from pyproject.toml / uv.lock
-uv run pytest -q        # run the test suite (62 tests)
+uv run pytest -q        # run the test suite (74 tests)
 ```
 
 To use it as a library in your own environment:
@@ -96,6 +96,7 @@ Each phase of the workflow has a self-contained notebook (`uv run jupyter lab`):
 | 3 — LHS design space | `notebooks/03_lhs_design_space.ipynb` | `doe/lhs`, `doe/multivariate` |
 | 4 — Bayesian optimization | `notebooks/04_bayesian_optimization.ipynb` | `optimization/surrogate`, `optimization/bayesopt` |
 | 5 — UQ & parameter estimation | `notebooks/05_uq_parameter_estimation.ipynb` | `uq/inverse`, `uq/uncertainty` |
+| 1.6 — Multi-mode chromatography | `notebooks/06_chromatography_modes.ipynb` | `models/chromatography` (modes, gradients, resolution) |
 
 ---
 

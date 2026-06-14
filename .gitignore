@@ -15,3 +15,7 @@ data/processed/*
 results/*
 !**/.gitkeep
 .ipynb_checkpoints/
+
+# Monograph: generated figures and LaTeX/Pandoc build output
+doc/figures/*.png
+doc/build/

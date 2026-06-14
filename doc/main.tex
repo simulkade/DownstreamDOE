@@ -1,0 +1,158 @@
+%==============================================================================
+%  DownstreamDOE — A Monograph
+%
+%  Mechanistic Models of Preparative Chromatography and the
+%  Methods of Experimental Design Behind a Virtual Downstream Laboratory
+%
+%  Build:  bash scripts/build_pdf.sh      (-> build/monograph.pdf)
+%          bash scripts/build_html.sh     (-> build/html/monograph.html)
+%  The preamble is deliberately kept Pandoc-friendly: every custom macro is a
+%  math macro or a titled tcolorbox, both of which survive the LaTeX -> HTML
+%  conversion.  See doc/README.md for details.
+%==============================================================================
+\documentclass[11pt,openright]{book}
+
+% --- Encoding & fonts (pdflatex) ---------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+
+% --- Page geometry & layout --------------------------------------------------
+\usepackage[a4paper,margin=1in,headheight=14pt]{geometry}
+\usepackage{parskip}
+\usepackage{emptypage}
+
+% --- Mathematics -------------------------------------------------------------
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{amsthm}
+
+% --- Tables, figures, lists --------------------------------------------------
+\usepackage{graphicx}
+\graphicspath{{figures/}{./}}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf}
+\usepackage{enumitem}
+\setlist{itemsep=2pt,topsep=3pt}
+
+% --- Colour, boxes -----------------------------------------------------------
+\usepackage{xcolor}
+\definecolor{accent}{HTML}{1F4E79}
+\definecolor{appcol}{HTML}{2C7A39}
+\definecolor{limcol}{HTML}{B23A2E}
+\definecolor{datcol}{HTML}{8A6D1B}
+\definecolor{keycol}{HTML}{1F4E79}
+\definecolor{procol}{HTML}{2C7A39}
+\definecolor{concol}{HTML}{B23A2E}
+\usepackage[most]{tcolorbox}
+
+% --- Headers / footers -------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[LE]{\small\nouppercase{\leftmark}}
+\fancyhead[RO]{\small\nouppercase{\rightmark}}
+\fancyfoot[C]{\thepage}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\thepage}\renewcommand{\headrulewidth}{0pt}}
+
+% --- Sectional typography ----------------------------------------------------
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\huge\bfseries\color{accent}}
+  {\filright\Large\chaptertitlename~\thechapter}{0.6ex}{\Huge}
+\titlespacing*{\chapter}{0pt}{10pt}{30pt}
+
+% --- Hyperlinks (load late) --------------------------------------------------
+\usepackage[colorlinks=true,linkcolor=accent,citecolor=accent,urlcolor=accent]{hyperref}
+\usepackage{cleveref}
+
+%==============================================================================
+%  Semantic call-out boxes.
+%  Defined with \newtcolorbox so that (a) pdflatex renders a titled coloured
+%  panel and (b) Pandoc emits <div class="..."> carrying the title text.
+%  Each takes the title as its mandatory argument so the title is visible in
+%  both outputs.
+%==============================================================================
+\newtcolorbox{appbox}[1]{breakable,enhanced,colback=appcol!5,colframe=appcol!70,
+  coltitle=white,fonttitle=\bfseries,title={Real-world application: #1}}
+\newtcolorbox{limitbox}[1]{breakable,enhanced,colback=limcol!5,colframe=limcol!70,
+  coltitle=white,fonttitle=\bfseries,title={Limitations \& assumptions: #1}}
+\newtcolorbox{databox}[1]{breakable,enhanced,colback=datcol!7,colframe=datcol!70,
+  coltitle=white,fonttitle=\bfseries,title={Calibration data \& experiments: #1}}
+\newtcolorbox{keybox}[1]{breakable,enhanced,colback=keycol!5,colframe=keycol!60,
+  coltitle=white,fonttitle=\bfseries,title={#1}}
+\newtcolorbox{prosbox}[1]{breakable,enhanced,colback=procol!6,colframe=procol!70,
+  coltitle=white,fonttitle=\bfseries,title={Strengths: #1}}
+\newtcolorbox{consbox}[1]{breakable,enhanced,colback=concol!6,colframe=concol!70,
+  coltitle=white,fonttitle=\bfseries,title={Weaknesses: #1}}
+
+% --- Theorem-like environments ----------------------------------------------
+\theoremstyle{definition}
+\newtheorem{example}{Example}[chapter]
+\newtheorem{remark}{Remark}[chapter]
+
+%==============================================================================
+%  Math macros (all expandable / Pandoc-safe).
+%==============================================================================
+% \pdv{f}{x} = first partial; \pdv[2]{f}{x} = second partial (optional order).
+\newcommand{\pdv}[3][]{\frac{\partial^{#1} #2}{\partial #3^{#1}}}
+\newcommand{\dv}[2]{\frac{\mathrm{d} #1}{\mathrm{d} #2}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\Real}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\qstar}{q^{\!*}}
+\newcommand{\transp}{^{\mathsf{T}}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+%==============================================================================
+\title{\bfseries Mechanistic Models of Preparative Chromatography\\[0.4em]
+       \large and the Methods of Experimental Design Behind\\
+       a Virtual Downstream Bioprocess Laboratory}
+\author{The \code{DownstreamDOE} Project}
+\date{\today}
+
+\begin{document}
+
+%------------------------------------------------------------------ title page
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+{\color{accent}\rule{\linewidth}{1.2pt}}\par\vspace{1.2em}
+{\Huge\bfseries Downstream\,DOE}\par\vspace{0.6em}
+{\Large A Monograph}\par\vspace{1.2em}
+{\large\itshape Mechanistic Models of Preparative Chromatography\\[0.3em]
+and the Methods of Experimental Design Behind\\[0.3em]
+a Virtual Downstream Bioprocess Laboratory}\par\vspace{1em}
+{\color{accent}\rule{\linewidth}{1.2pt}}\par
+\vfill
+{\large The \code{DownstreamDOE} Project}\par\vspace{0.4em}
+{\normalsize \today}\par
+\vspace{2cm}
+\end{titlepage}
+
+\frontmatter
+\pagenumbering{roman}
+\input{chapters/preface}
+\cleardoublepage
+\tableofcontents
+\listoffigures
+
+\mainmatter
+\pagenumbering{arabic}
+\include{chapters/ch1_models}
+\include{chapters/ch2_design}
+
+\backmatter
+\input{chapters/bibliography}
+
+\end{document}

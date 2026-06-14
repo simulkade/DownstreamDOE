@@ -1,0 +1,956 @@
+\chapter{Mechanistic Models of Preparative Chromatography}
+\label{ch:models}
+
+\begin{quote}\itshape
+``All models are wrong, but some are useful.'' --- G.~E.~P.~Box, whose name also
+graces the experimental designs of Chapter~\ref{ch:design}.
+\end{quote}
+
+\noindent
+A chromatographic column separates the components of a mixture by exploiting the
+differences in how strongly each component partitions between a flowing
+\emph{mobile phase} and a stationary, porous \emph{adsorbent}. Feed is loaded,
+washed, and then eluted---often by changing the composition of the mobile phase
+so as to weaken binding---and the components emerge at the outlet at different
+times. To \emph{model} this process is to write down, and then solve, the
+conservation laws that govern the migration of each component through the bed,
+closed by a constitutive law (the \emph{adsorption isotherm}) that says how much
+of each component is bound at equilibrium as a function of the local mobile-phase
+state.
+
+This chapter builds that model from the ground up. Section~\ref{sec:governing}
+derives the governing equations. Section~\ref{sec:engine} specialises them to the
+form the package integrates and describes the numerical method.
+Section~\ref{sec:isotherm} introduces the unifying idea that organises the whole
+package---\emph{one isotherm core, and the chromatography mode is nothing but the
+law by which a modulator controls binding affinity}. Sections~\ref{sec:iex}
+through~\ref{sec:rp} treat the individual modes. Section~\ref{sec:program}
+describes how an elution program (in particular, a gradient) is specified, and
+Section~\ref{sec:metrics} defines the performance metrics that turn a simulated
+chromatogram into the numbers a process developer cares about.
+Section~\ref{sec:legacy} presents the reduced equilibrium-dispersive model the
+package retains for fast single-component work, and Section~\ref{sec:grm} the
+\emph{general rate model}---a second, finite-volume solver that resolves the
+film and intraparticle-diffusion mass transfer explicitly and is mass
+conservative where the lumped engine is not. We close, in
+Section~\ref{sec:limits-summary}, with a consolidated statement of the model
+family's limits of validity.
+
+%==============================================================================
+\section{The column as a distributed-parameter system}
+\label{sec:governing}
+
+Consider a cylindrical column of length $L$ and internal diameter $d$, packed
+with porous adsorbent particles. Let the \emph{bed porosity} (the volume
+fraction occupied by the flowing interstitial liquid) be $\eps$. A
+mobile-phase pump drives liquid through the bed at an \emph{interstitial
+velocity} $u$ (the true velocity of the liquid between particles, related to the
+volumetric flow rate $Q$ and the empty cross-sectional area $A=\pi d^2/4$ by
+$Q = u A \eps$). These quantities, and the derived volumes, are exactly the
+fields of the package's \code{ColumnGeometry} data structure:
+%
+\begin{equation}
+A = \frac{\pi d^2}{4}, \qquad
+V_{\mathrm{col}} = A L, \qquad
+V_{\mathrm{resin}} = V_{\mathrm{col}}(1-\eps).
+\label{eq:geom}
+\end{equation}
+
+We track, for each component $i$, two concentrations defined per unit volume:
+$c_i(z,t)$, the concentration in the mobile phase, and $q_i(z,t)$, the
+concentration adsorbed on the stationary phase (expressed per unit volume of
+adsorbent). A mass balance on a thin slice of the column, $[z, z+\dd z]$,
+equates the rate of accumulation to the net flux in by convection and
+dispersion, minus the rate at which material is captured by the solid:
+%
+\begin{equation}
+\underbrace{\eps\,\pdv{c_i}{t}}_{\text{mobile accumulation}}
++ \underbrace{(1-\eps)\,\pdv{q_i}{t}}_{\text{uptake by solid}}
+= \underbrace{-\,\eps u \pdv{c_i}{z}}_{\text{convection}}
++ \underbrace{\eps D_{\mathrm{ap}}\,\pdv[2]{c_i}{z}}_{\text{axial dispersion}} .
+\label{eq:fullbalance}
+\end{equation}
+%
+Here $D_{\mathrm{ap}}$ is an \emph{apparent axial dispersion coefficient}
+($\mathrm{m^2\,s^{-1}}$): a lumped term that represents, collectively, molecular
+diffusion, the spread of residence times caused by the tortuous flow path
+(eddy dispersion), and---crucially---the band broadening that arises because mass
+transfer into and out of the particles is not instantaneous. Dividing through by
+$\eps$ and introducing the \emph{phase ratio}
+%
+\begin{equation}
+\phi \;=\; \frac{1-\eps}{\eps},
+\label{eq:phaseratio}
+\end{equation}
+%
+the volume of solid per unit volume of liquid, gives the convection--dispersion
+equation in the form the package uses:
+%
+\begin{equation}
+\pdv{c_i}{t}
+= -\,u\,\pdv{c_i}{z}
++ D_{\mathrm{ap}}\,\pdv[2]{c_i}{z}
+- \phi\,\pdv{q_i}{t}.
+\label{eq:cdmobile}
+\end{equation}
+
+Equation~\eqref{eq:cdmobile} is one equation in two unknowns, $c_i$ and $q_i$.
+It must be closed by a statement of how the adsorbed phase responds to the
+mobile phase. There are two classical closures, and the package's design hinges
+on the choice between them.
+
+\paragraph{The equilibrium closure.}
+If mass transfer is fast compared with convection, the two phases are everywhere
+in local equilibrium, $q_i = q_i^{\mathrm{eq}}(c)$, and one may substitute
+$\partial q_i/\partial t = (\dd q_i/\dd c_i)\,\partial c_i/\partial t$ to fold the
+isotherm into a single \emph{retardation factor}. This is the classical
+\emph{equilibrium-dispersive} (ED) model; it is fast but cannot, by
+construction, represent a mobile-phase composition that changes in time without
+introducing awkward source terms. The package keeps an ED model for
+single-component, isocratic work (Section~\ref{sec:legacy}).
+
+\paragraph{The rate closure.}
+If, instead, one writes a \emph{kinetic} law for the approach of $q_i$ to its
+equilibrium value, the adsorbed phase becomes an independent state variable that
+can be carried explicitly. This is the \emph{transport-dispersive} model, and it
+is the general engine of the package. It is the rate closure that makes
+\emph{gradient elution}---the central technique of preparative
+chromatography---natural to simulate, because the mobile-phase modulator may
+vary in time without any $\dd H/\dd t$ source term appearing.
+
+%==============================================================================
+\section{The transport-dispersive engine}
+\label{sec:engine}
+
+The package's general model (\code{models/chromatography/engine.py}) augments the
+state at each point of the column with the adsorbed concentrations $q_i$ and with
+a \emph{modulator} $m(z,t)$---the mobile-phase variable that governs binding
+strength (salt concentration for ion exchange and hydrophobic interaction; the
+volume fraction of organic solvent for reversed phase). The modulator is treated
+as an unretained tracer: it is convected and dispersed but does not adsorb.
+
+The full coupled system, for $n_c$ components, is
+%
+\begin{align}
+\text{modulator:}\quad
+&\pdv{m}{t} = -\,u\,\pdv{m}{z} + D_{\mathrm{ap}}\,\pdv[2]{m}{z},
+\label{eq:mod}\\[0.4em]
+\text{mobile:}\quad
+&\pdv{c_i}{t} = -\,u\,\pdv{c_i}{z} + D_{\mathrm{ap}}\,\pdv[2]{c_i}{z}
+  - \phi\,\pdv{q_i}{t},
+\label{eq:mobile}\\[0.4em]
+\text{stationary:}\quad
+&\pdv{q_i}{t} = k_{m,i}\,\bigl(\qstar_i(\bm c, m, \mathrm{pH}) - q_i\bigr).
+\label{eq:ldf}
+\end{align}
+%
+Equation~\eqref{eq:ldf} is the \emph{linear driving force} (LDF) approximation:
+the rate of adsorption is proportional to the distance of the adsorbed
+concentration from its equilibrium value $\qstar_i$, with a lumped
+\emph{mass-transfer coefficient} $k_{m,i}$ (units $\mathrm{s^{-1}}$). The
+equilibrium loading $\qstar_i$ is supplied by the isotherm of
+Section~\ref{sec:isotherm}.
+
+\begin{keybox}{Why carry the adsorbed phase explicitly?}
+Folding the isotherm into a retardation factor (the ED model) requires the
+mobile-phase composition to be constant, because the retardation factor then
+depends on time and a $\partial H/\partial t$ source term appears. By keeping
+$q_i$ as a state variable governed by the rate law~\eqref{eq:ldf}, the inlet
+modulator $m(0,t)$ may follow an arbitrary gradient with \emph{no} extra terms.
+The price is $n_c$ additional fields. The mass-transfer coefficient $k_{m,i}$
+then does double duty: it is a physical rate constant, and it is the knob that
+sets the band-broadening (and hence the plate count) of the simulated peaks. The
+equilibrium-dispersive limit is recovered as $k_{m,i}\to\infty$.
+\end{keybox}
+
+\subsection{Boundary and initial conditions}
+
+The column is fed at the inlet ($z=0$) and discharges at the outlet ($z=L$):
+%
+\begin{align}
+\text{inlet (Dirichlet):}\quad & c_i(0,t) = c_{i,\mathrm{feed}}(t), \qquad
+  m(0,t) = m_{\mathrm{in}}(t), \\
+\text{outlet (Neumann):}\quad & \left.\pdv{c_i}{z}\right|_{z=L} = 0, \qquad
+  \left.\pdv{m}{z}\right|_{z=L} = 0.
+\end{align}
+%
+The inlet feed concentration $c_{i,\mathrm{feed}}(t)$ is a rectangular pulse
+during the load phase and zero otherwise; the inlet modulator $m_{\mathrm{in}}(t)$
+follows the elution program (Section~\ref{sec:program}). The zero-gradient
+outlet condition is the physically appropriate statement that the column
+discharges into open tubing. Initially the column is pre-equilibrated at the
+starting modulator value and is free of protein:
+$c_i(z,0)=0$, $q_i(z,0)=0$, $m(z,0)=m_{\mathrm{in}}(0)$.
+
+\subsection{Spatial discretisation: the method of lines}
+\label{sec:mol}
+
+The column is divided into $N$ finite-volume cells of width $\Delta z = L/N$
+(the field \code{n\_cells}). The spatial derivatives are replaced by finite
+differences, converting the partial differential
+equations~\eqref{eq:mod}--\eqref{eq:ldf} into a large system of ordinary
+differential equations in time---one per state variable per cell. The schemes
+are chosen for stability rather than formal order of accuracy:
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}p{0.27\linewidth} p{0.36\linewidth} p{0.29\linewidth}@{}}
+\toprule
+\textbf{Term} & \textbf{Scheme} & \textbf{Rationale} \\
+\midrule
+Convection $u\,\partial c/\partial z$ &
+First-order \emph{upwind}: $u(c_i - c_{i-1})/\Delta z$ &
+Stable and non-oscillatory at every P\'eclet number \\
+Dispersion $D_{\mathrm{ap}}\,\partial^2 c/\partial z^2$ &
+Second-order \emph{central}: $D_{\mathrm{ap}}(c_{i+1}-2c_i+c_{i-1})/\Delta z^2$ &
+Accurate and stable for $D_{\mathrm{ap}}>0$ \\
+Inlet boundary & Dirichlet ghost cell $c_0 = c_{\mathrm{feed}}(t)$ &
+Direct imposition of the feed \\
+Outlet boundary & Zero-gradient ghost cell $c_{N+1}=c_N$ &
+Column discharges to open tubing \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Numerical dispersion.}
+First-order upwinding introduces an artificial diffusion of magnitude
+$D_{\mathrm{num}} \approx u\,\Delta z/2$. In practice this is folded into the
+interpretation of $D_{\mathrm{ap}}$: the simulated band width reflects the sum of
+the physical dispersion and the grid-induced dispersion, so the cell count $N$
+becomes, with $k_{m,i}$, part of how the plate count is tuned. A converged
+solution requires $\Delta z$ small enough that $D_{\mathrm{num}}$ is comfortably
+below the physical $D_{\mathrm{ap}}$.
+
+\subsection{Time integration: implicit BDF}
+
+The resulting ODE system is \emph{stiff}. The stiffness has two sources: the
+rate constant $k_{m,i}$ can be large (fast local equilibration), and, when
+binding is strong, a small change in mobile concentration drives a large change
+in adsorbed concentration through the $-\phi\,\partial q_i/\partial t$ coupling
+in~\eqref{eq:mobile}. An explicit integrator would be forced to take
+ruinously small time steps. The package therefore uses the implicit
+\emph{Backward Differentiation Formula} (BDF) integrator of
+\code{scipy.integrate.solve\_ivp}, which selects its order and step size
+adaptively from the local dynamics and is unconditionally stable for this class
+of problem.
+
+\paragraph{Exploiting sparsity.}
+An implicit integrator must repeatedly form (or approximate) the Jacobian of the
+right-hand side. Formed by dense finite differences this would cost $\mathcal
+O(n)$ right-hand-side evaluations per step, where $n = 2 n_c N + N$ is the total
+state dimension. The package instead hands the solver the \emph{sparsity
+pattern} of the Jacobian (\code{\_jacobian\_sparsity}). The structure is local:
+in cell $j$, the mobile concentration $c_{i,j}$ couples only to its transport
+neighbours $c_{i,j\pm1}$, to every component's concentration in the
+\emph{same} cell (through the competitive isotherm), to its own $q_{i,j}$, and to
+the modulator $m_j$; the modulator couples only to its transport neighbours.
+Supplying this pattern lets the solver reconstruct the Jacobian from a handful of
+graph-coloured evaluations instead of $n$, which is the dominant speed-up that
+makes a gradient run feasible inside a design loop.
+
+\begin{remark}
+The modulator is floored at a small positive value ($10^{-9}$) before it is used
+in the isotherm. This guards the ion-exchange affinity law, which contains the
+factor $(\Lambda/m)^{\nu}$ and would otherwise be singular should dispersion
+overshoot drive the local salt concentration momentarily negative.
+\end{remark}
+
+%==============================================================================
+\section{One isotherm core; the mode is the modulator law}
+\label{sec:isotherm}
+
+The constitutive heart of the model is the equilibrium isotherm $\qstar_i(\bm c,
+m, \mathrm{pH})$, supplied by \code{models/chromatography/isotherms.py}. The
+package's organising insight is that \emph{every} common chromatography mode can
+be written with the \emph{same} multi-component competitive-Langmuir functional
+form, and that the modes differ \emph{only} in how a single scalar
+affinity factor depends on the modulator. Concretely,
+%
+\begin{equation}
+\boxed{\;
+\qstar_i = \frac{q_{\max,i}\,b_i(m,\mathrm{pH})\,c_i}
+                {1 + \sum_{j=1}^{n_c} b_j(m,\mathrm{pH})\,c_j}
+\;}
+\qquad\text{(nonlinear / overload),}
+\label{eq:langmuir}
+\end{equation}
+%
+where $q_{\max,i}$ is the saturation capacity of component $i$ (g per litre of
+adsorbent) and $b_i$ is its dimensionless affinity. In the \emph{dilute} limit,
+where the bound amount is far below saturation
+($\sum_j b_j c_j \ll 1$), the denominator collapses to unity and the isotherm
+becomes linear,
+%
+\begin{equation}
+\qstar_i = H_i(m,\mathrm{pH})\, c_i, \qquad
+H_i = q_{\max,i}\, b_i(m,\mathrm{pH}),
+\label{eq:henry}
+\end{equation}
+%
+with $H_i$ the \emph{Henry constant} (the initial slope of the isotherm). The
+\code{Isotherm} object carries a Boolean \code{linear} flag that selects between
+the two forms; the competition denominator in~\eqref{eq:langmuir} is precisely
+what allows components to displace one another on an overloaded column, and is
+therefore what makes multi-component resolution possible.
+
+\begin{keybox}{The unifying picture}
+Choose a mode $\Leftrightarrow$ choose the affinity law $b_i(m,\mathrm{pH})$.
+Everything else---transport, numerics, metrics---is shared. The three laws below
+(Figure~\ref{fig:affinity}) are the entire mode-specific content of the model.
+\end{keybox}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{affinity_laws.png}
+\caption[The three modulator affinity laws]{The affinity factor $b(m)$ for the
+three modes, on a logarithmic ordinate. \emph{Left:} ion exchange (SMA)---binding
+falls steeply as salt rises, $b\propto m^{-\nu}$. \emph{Centre:} hydrophobic
+interaction (salting-out)---binding \emph{grows} exponentially with salt.
+\emph{Right:} reversed phase (linear solvent strength)---binding falls
+exponentially as the organic fraction rises. The sign and shape of these curves
+dictate the direction of the elution gradient in each mode.}
+\label{fig:affinity}
+\end{figure}
+
+%==============================================================================
+\section{Ion-exchange chromatography (CEX / AEX)}
+\label{sec:iex}
+
+\subsection{The Steric-Mass-Action affinity law}
+
+In ion-exchange chromatography the adsorbent bears fixed charges that are
+initially neutralised by small counter-ions (typically from the salt). A charged
+protein binds by displacing several of these counter-ions; elution is achieved by
+raising the salt concentration, which shifts the competition back toward the
+counter-ion. The \emph{Steric-Mass-Action} (SMA) formalism captures this
+stoichiometric exchange. In the package the SMA law enters through the affinity
+factor (class \code{SMALaw}):
+%
+\begin{equation}
+b_i(m,\mathrm{pH})
+= \beta_i
+\left(\frac{\Lambda}{m}\right)^{\nu_i}
+\exp\!\bigl[\nu_{\mathrm{pH},i}\,(\mathrm{pH}-\mathrm{pH}_{\mathrm{ref}})\bigr],
+\label{eq:sma}
+\end{equation}
+%
+so that, in the dilute limit~\eqref{eq:henry}, the Henry constant is
+%
+\begin{equation}
+H_i = q_{\max,i}\,\beta_i
+\left(\frac{\Lambda}{m}\right)^{\nu_i}
+\exp\!\bigl[\nu_{\mathrm{pH},i}\,(\mathrm{pH}-\mathrm{pH}_{\mathrm{ref}})\bigr].
+\label{eq:smahenry}
+\end{equation}
+%
+The two dependences this law encodes are the two great levers of an
+ion-exchange step. \emph{Salt} enters as $m^{-\nu_i}$: because the
+characteristic charge $\nu_i$ is typically $3$--$8$ for a protein, a modest
+increase in salt produces an order-of-magnitude collapse in binding---this is
+what makes a salt gradient such a powerful elution tool. \emph{pH} enters
+through the exponential factor: it tunes the protein's net charge and hence its
+affinity. A \emph{cation} exchanger (\code{cation\_exchange}) takes
+$\nu_{\mathrm{pH}}<0$, so binding strengthens as the pH falls below the reference
+and the protein becomes more positively charged; an \emph{anion} exchanger
+(\code{anion\_exchange}) takes $\nu_{\mathrm{pH}}>0$. The two builders are
+literally the same function with opposite sign of $\nu_{\mathrm{pH}}$.
+
+\subsection{Parameters}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{longtable}{@{}l l p{0.52\linewidth}@{}}
+\toprule
+\textbf{Symbol} & \textbf{Units} & \textbf{Meaning} \\
+\midrule
+\endhead
+$\beta_i$ & --- & Affinity prefactor of component $i$; sets the absolute binding
+   strength at the reference conditions (\code{beta}). \\
+$\nu_i$ & --- & Characteristic charge: the number of counter-ions displaced on
+   binding; governs salt sensitivity (\code{nu}). \\
+$\Lambda$ & mM & Ionic capacity of the resin: the concentration of fixed charges
+   available for exchange (\code{ionic\_capacity}). \\
+$\nu_{\mathrm{pH},i}$ & --- & Sensitivity of $\ln b_i$ to pH; negative for CEX,
+   positive for AEX (\code{nu\_ph}). \\
+$\mathrm{pH}_{\mathrm{ref}}$ & --- & Reference pH at which the pH factor is unity
+   (\code{ph\_ref}). \\
+$q_{\max,i}$ & g\,L$^{-1}$ & Saturation capacity, per litre of adsorbent; the
+   overload ceiling (\code{q\_max}). \\
+$m$ & mM & The modulator: here the mobile-phase salt concentration. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Figure~\ref{fig:henry} shows the resulting Henry-constant surface
+$H(m,\mathrm{pH})$ for a representative cation exchanger: binding spans several
+decades across the operating window, and the salt and pH axes are the two
+critical process parameters that an ion-exchange characterisation study sets out
+to map.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{henry_surface.png}
+\caption[SMA Henry-constant surface]{The base-10 logarithm of the SMA Henry
+constant, $\log_{10} H(m,\mathrm{pH})$, for a model cation exchanger
+($\nu=4$, $\nu_{\mathrm{pH}}=-1.2$, $\Lambda=1000$~mM). Binding falls steeply
+toward high salt (the elution direction) and weakens as pH rises (the protein
+loses positive charge). The near-linear, widely spaced contours are the
+signature of the power-law/exponential form of Eq.~\eqref{eq:smahenry}.}
+\label{fig:henry}
+\end{figure}
+
+\subsection{The elution chromatogram}
+
+Loaded at low salt, where $H$ is enormous and the protein is effectively
+immobile, and then eluted by a rising salt gradient, the protein migrates only
+once the local salt has climbed enough to bring $H$ toward unity. The result is
+the characteristic gradient-elution peak of Figure~\ref{fig:cex}: a sharp band
+emerging at a well-defined salt concentration, the \emph{elution salt}, which is
+itself a reproducible, parameter-dependent fingerprint of the molecule.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\linewidth]{cex_gradient.png}
+\caption[CEX gradient chromatogram]{A simulated cation-exchange linear
+salt-gradient separation (solid: outlet protein concentration; dashed: the inlet
+salt gradient), computed by \code{run\_column}. The protein is retained through
+load and wash at low salt and elutes as a compact band once the gradient lifts
+the salt past its critical elution value.}
+\label{fig:cex}
+\end{figure}
+
+\begin{appbox}{ion-exchange chromatography}
+Ion exchange is the most widely used preparative mode in the manufacture of
+therapeutic proteins. \emph{Cation} exchange is the standard \emph{polishing}
+step after Protein~A capture of a monoclonal antibody, where it clears
+aggregates, host-cell proteins, leached Protein~A, and charge variants, and is
+frequently run in \emph{bind-and-elute} mode with a salt or pH gradient.
+\emph{Anion} exchange is the classic \emph{flow-through} polishing step for
+antibodies (the product flows past while acidic impurities, DNA, and endotoxin
+bind) and a capture step for many acidic proteins, plasmids, and viral vectors.
+The salt/pH dependence encoded by Eq.~\eqref{eq:sma} is exactly the design space
+a chromatography development scientist explores when setting the load pH and the
+gradient.
+\end{appbox}
+
+\begin{databox}{ion exchange (SMA)}
+The SMA parameters are obtained from a small, classical set of experiments.
+\textbf{(i) Linear-gradient elution (LGE) experiments.} A series of dilute
+injections is run at several gradient slopes; the salt concentration at peak
+apex, $m_R$, is recorded. Plotting $\log(\text{normalised gradient slope})$
+against $\log m_R$ yields a straight line---the \emph{Yamamoto plot}---whose
+slope and intercept give the characteristic charge $\nu_i$ and the equilibrium
+prefactor $\beta_i$ directly. \textbf{(ii) Isocratic retention.} Measuring the
+retention factor at several constant salt concentrations gives $\nu_i$ from the
+slope of $\log k'$ versus $\log m$. \textbf{(iii) pH scouting.} Repeating the
+above at several pH values calibrates $\nu_{\mathrm{pH},i}$ and
+$\mathrm{pH}_{\mathrm{ref}}$. \textbf{(iv) Breakthrough curves and batch
+isotherms.} Frontal analysis (loading to saturation and recording the
+breakthrough) yields the saturation capacity $q_{\max,i}$ and the resin ionic
+capacity $\Lambda$ (the latter also by acid--base or counter-ion titration).
+Inverse fitting of these data to the model is exactly the task of the package's
+uncertainty-quantification layer.
+\end{databox}
+
+\begin{limitbox}{ion exchange (SMA)}
+The implemented SMA law is the \emph{dilute-limit} affinity~\eqref{eq:sma}
+embedded in a competitive-Langmuir denominator. Relative to the full implicit
+SMA isotherm, in which the available charge is reduced by the steric shielding
+$\sigma_i q_i$ of already-bound molecules, this form omits the explicit steric
+term: the overload ceiling is represented by $q_{\max,i}$ rather than by the
+$(\Lambda - \sum(\nu_i+\sigma_i)q_i)$ factor of the rigorous theory. It is
+therefore most accurate when the column is not driven deep into overload. The law
+also assumes a single, fixed ionic capacity $\Lambda$ and a pH effect that is
+log-linear over the window of interest; it does not represent conformational
+changes, charge regulation, or salt-mediated changes in $q_{\max}$. Finally, the
+characteristic charge $\nu_i$ is treated as constant, whereas for some proteins
+it drifts with pH.
+\end{limitbox}
+
+%==============================================================================
+\section{Hydrophobic-interaction chromatography (HIC)}
+\label{sec:hic}
+
+Hydrophobic-interaction chromatography exploits the opposite salt dependence.
+The adsorbent presents mildly hydrophobic ligands; at \emph{high} salt the
+ordered water around exposed hydrophobic patches on the protein is disrupted
+(the ``salting-out'' effect), and the protein binds. Elution is achieved by
+\emph{lowering} the salt. The package encodes this with the salting-out affinity
+law (class \code{SaltingOutLaw}):
+%
+\begin{equation}
+b_i(m) = \beta_i \, \exp\!\bigl(K_{s,i}\, m\bigr),
+\label{eq:hic}
+\end{equation}
+%
+with $\beta_i$ the affinity at zero salt and $K_{s,i}$ the \emph{salting-out
+coefficient} (units mM$^{-1}$). Because $b_i$ grows exponentially with salt
+(Figure~\ref{fig:affinity}, centre), a HIC step is loaded at high salt and eluted
+by a \emph{descending} salt gradient---the mirror image of ion exchange.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}l l p{0.55\linewidth}@{}}
+\toprule
+\textbf{Symbol} & \textbf{Units} & \textbf{Meaning} \\
+\midrule
+$\beta_i$ & --- & Residual affinity extrapolated to zero salt (\code{beta}). \\
+$K_{s,i}$ & mM$^{-1}$ & Salting-out coefficient; the slope of $\ln b_i$ with
+   salt, set by the protein's surface hydrophobicity and the salt's position in
+   the Hofmeister series (\code{ks}). \\
+$q_{\max,i}$ & g\,L$^{-1}$ & Saturation capacity (\code{q\_max}). \\
+$m$ & mM & Modulator: mobile-phase salt (e.g.\ ammonium sulfate). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{appbox}{hydrophobic-interaction chromatography}
+HIC is a powerful \emph{polishing} and \emph{aggregate-clearance} step. Because
+it separates on hydrophobicity rather than charge, it is orthogonal to ion
+exchange and is often paired with it in a platform sequence to attack impurities
+that co-elute on a charge basis---most importantly antibody aggregates, which
+expose more hydrophobic surface than the monomer and are thus retained more
+strongly. HIC is also valued because it can be run directly on a high-salt
+ion-exchange eluate with little conditioning, and because it elutes the product
+into a low-salt buffer suited to the next step.
+\end{appbox}
+
+\begin{databox}{HIC}
+The salting-out coefficient $K_{s,i}$ and prefactor $\beta_i$ are obtained from
+\emph{isocratic retention measurements at several salt concentrations}: a plot of
+$\ln k'$ against salt molarity is linear with slope $\propto K_{s,i}$ and
+intercept $\propto \ln\beta_i$. The choice and concentration range of the salt
+are themselves design variables (a Hofmeister scouting study). Saturation
+capacity $q_{\max,i}$ again comes from frontal-analysis breakthrough curves at
+the load (high-salt) condition.
+\end{databox}
+
+\begin{limitbox}{HIC}
+The single-exponential law~\eqref{eq:hic} is an empirical, mean-field
+representation: it captures the dominant log-linear salt dependence but not the
+curvature seen at very high salt, nor the protein conformational changes that HIC
+ligands can induce, nor any explicit dependence on temperature or salt type
+(both of which are folded into $K_{s,i}$ and must be re-calibrated if they
+change). As with the other modes, $q_{\max,i}$ is taken constant.
+\end{limitbox}
+
+%==============================================================================
+\section{Reversed-phase chromatography (RP-HPLC)}
+\label{sec:rp}
+
+In reversed-phase chromatography the stationary phase is strongly hydrophobic
+(e.g.\ alkyl-bonded silica) and the modulator is the volume fraction $\varphi$ of
+an organic solvent (acetonitrile, methanol) in a predominantly aqueous mobile
+phase. Solutes partition more into the mobile phase as $\varphi$ rises, so
+binding falls and elution proceeds by an \emph{increasing} organic gradient. The
+package uses the \emph{linear-solvent-strength} (LSS) law (class
+\code{LinearSolventStrengthLaw}):
+%
+\begin{equation}
+b_i(\varphi) = \beta_i \, \exp\!\bigl(-S_i\,\varphi\bigr),
+\label{eq:lss}
+\end{equation}
+%
+where $\beta_i$ is the affinity in purely aqueous mobile phase ($\varphi=0$) and
+$S_i$ is the \emph{solvent-strength} slope. Equation~\eqref{eq:lss} is the
+exponential form of the celebrated empirical observation that
+$\log k' = \log k'_0 - S\varphi$ over a useful range of $\varphi$.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}l l p{0.55\linewidth}@{}}
+\toprule
+\textbf{Symbol} & \textbf{Units} & \textbf{Meaning} \\
+\midrule
+$\beta_i$ & --- & Affinity in pure aqueous eluent (\code{beta}). \\
+$S_i$ & --- & Solvent-strength parameter; the slope of $\ln b_i$ with organic
+   fraction. For large biomolecules $S_i$ is large, which is why peptides and
+   proteins elute over a narrow $\varphi$ window (\code{s}). \\
+$q_{\max,i}$ & g\,L$^{-1}$ & Saturation capacity (\code{q\_max}). \\
+$\varphi$ & --- & Modulator: organic volume fraction, $0\le\varphi\le 1$. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{appbox}{reversed-phase chromatography}
+RP-HPLC offers the highest resolving power of the common modes and is the
+backbone of analytical characterisation---peptide mapping, purity and
+impurity profiling, and the separation of closely related variants. Preparatively
+it is used for peptides, oligonucleotides, and some small proteins, and for
+insulin and similar molecules at manufacturing scale. Its resolving power comes
+at the cost of organic solvents and, often, conditions that can denature larger
+proteins---hence its dominance in analysis and small-molecule/peptide
+purification rather than in the gentle capture of fragile biologics.
+\end{appbox}
+
+\begin{databox}{RP-HPLC}
+The LSS parameters $S_i$ and $\beta_i$ are obtained from a handful of
+\emph{linear-gradient scouting runs} at different gradient slopes (or isocratic
+runs at different $\varphi$): for each solute the retention is fitted to
+$\log k' = \log\beta_i + \log q_{\max,i} - S_i\varphi$. Two well-chosen gradient
+runs suffice in principle to fix the pair $(S_i,\beta_i)$ for each solute---this
+two-run calibration is the basis of widely used method-development software.
+\end{databox}
+
+\begin{limitbox}{RP-HPLC}
+The LSS law is accurate over a limited $\varphi$ range; real $\log k'$ versus
+$\varphi$ plots are gently curved (quadratic), and the linear form breaks down
+near the extremes of composition. The model represents neither the temperature
+dependence of retention, the influence of ion-pairing or mobile-phase additives,
+nor on-column conformational effects, all of which are subsumed into effective
+constants that must be re-measured if conditions change.
+\end{limitbox}
+
+%==============================================================================
+\section{Multi-component resolution and the nonlinear regime}
+\label{sec:multicomp}
+
+The linear (Henry) form~\eqref{eq:henry} suffices to predict \emph{where} a
+dilute band elutes, but resolution of closely related species on a
+\emph{loaded} column is a nonlinear phenomenon: as the bound phase fills, the
+competition denominator of~\eqref{eq:langmuir} couples the components, and a more
+strongly bound species can displace a weaker one. The builder
+\code{high\_resolution\_iex} assembles exactly this case---an SMA ion exchanger
+run with finite $q_{\max,i}$ and full competition---so that the interplay of
+selectivity (differences in $\nu_i$ and $\beta_i$), loading, and gradient slope
+can be studied. The same competition is what produces the self-sharpening fronts
+and the displacement effects of overloaded preparative chromatography.
+
+The single most important operating variable for resolution is the
+\emph{gradient slope}. Figure~\ref{fig:slope} demonstrates the universal
+trade-off it controls: a steep gradient elutes the band early, tall, and narrow,
+but compresses the separation in modulator space (poor selectivity between
+neighbours); a shallow gradient spreads the separation out, improving resolution
+at the cost of a later, broader, more dilute peak and a longer cycle.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\linewidth]{gradient_slope.png}
+\caption[Gradient slope and the resolution--dilution trade-off]{The same protein
+eluted under three salt-gradient slopes (dotted: the gradients), computed by
+\code{run\_column}; $N$ is the apparent plate count from
+Eq.~\eqref{eq:plates}. A steep gradient (green) gives an early, sharp,
+concentrated peak; a shallow gradient (red) gives a late, broad, dilute one. This
+single knob is the principal lever of preparative method development, and a
+natural factor for the experimental designs of Chapter~\ref{ch:design}.}
+\label{fig:slope}
+\end{figure}
+
+%==============================================================================
+\section{The elution program: specifying a gradient}
+\label{sec:program}
+
+A run is described (\code{models/chromatography/program.py}) as an ordered list
+of \emph{segments}, each measured in \emph{column volumes} (CV) and each either
+holding the modulator constant or ramping it linearly. A segment is a
+\code{Segment(name, duration\_cv, m\_start, m\_end)}; a linear ramp---the
+``linearly changing eluate'' that is the gradient---is the case
+$m_{\mathrm{end}}\neq m_{\mathrm{start}}$. A typical bind-and-elute program is
+the five-segment sequence built by \code{ElutionProgram.linear\_gradient}:
+%
+\[
+\text{equilibrate} \;\to\; \text{load} \;\to\; \text{wash}
+\;\to\; \text{gradient} \;\to\; \text{strip}.
+\]
+
+Durations in CV are converted to seconds against a particular column and flow.
+One column volume passes in
+%
+\begin{equation}
+t_{\mathrm{CV}} = \frac{V_{\mathrm{col}}}{Q} = \frac{V_{\mathrm{col}}}{u A \eps}
+= \frac{L}{u\,\eps},
+\label{eq:tcv}
+\end{equation}
+%
+after which the inlet modulator $m_{\mathrm{in}}(t)$ is the piecewise-linear
+function interpolated across the segment breakpoints. The protein
+\code{Injection} is a separate rectangular feed pulse. Its duration follows from
+the \emph{load density} $\rho_{\mathrm{load}}$ (grams of protein per litre of
+adsorbent): the volume that delivers it is $V_{\mathrm{inject}} =
+\rho_{\mathrm{load}} V_{\mathrm{resin}} / c_{\mathrm{feed}}$, which expressed in
+column volumes is
+%
+\begin{equation}
+\mathrm{CV}_{\mathrm{load}}
+= \frac{\rho_{\mathrm{load}}\,(1-\eps)}{c_{\mathrm{feed}}},
+\label{eq:loadcv}
+\end{equation}
+%
+with $c_{\mathrm{feed}}$ the total feed concentration
+(\code{Injection.from\_load\_density}). Load density, gradient slope, load and
+elution pH, and start/end salt are thus the natural \emph{critical process
+parameters} that the designs of Chapter~\ref{ch:design} vary.
+
+%==============================================================================
+\section{Performance and separation metrics}
+\label{sec:metrics}
+
+A simulated chromatogram is only useful once reduced to the quantities a process
+is specified on. The package (\code{models/chromatography/metrics.py}) computes
+two families of metric.
+
+\paragraph{Pool metrics.}
+Given a collection window (the ``cut points'') $[t_1,t_2]$, the outlet
+chromatogram of the target component is integrated by the trapezoidal rule to
+give the pooled mass, and three ratios follow:
+%
+\begin{align}
+\text{yield} &= \frac{\int_{t_1}^{t_2} c_{\mathrm{tgt}}\,\dd t}
+                      {\int_{0}^{\infty} c_{\mathrm{tgt}}\,\dd t}, \\[0.3em]
+\text{purity} &= \frac{\int_{t_1}^{t_2} c_{\mathrm{tgt}}\,\dd t}
+                      {\sum_i \int_{t_1}^{t_2} c_i\,\dd t}, \\[0.3em]
+\text{productivity} &= \frac{\int_{t_1}^{t_2} c_{\mathrm{tgt}}\,\dd t}
+                            {t_{\mathrm{cycle}}}.
+\end{align}
+%
+Yield, purity, and productivity are the canonical, and usually competing,
+objectives of a downstream step---and exactly the responses optimised by the
+Bayesian loop of Chapter~\ref{ch:design}.
+
+\paragraph{Peak metrics.}
+For peak shape the package uses \emph{statistical moments}, which are robust to
+the skew of gradient peaks where a Gaussian fit would be biased. With the
+zeroth, first, and second moments giving the area, the retention time, and the
+variance,
+%
+\begin{equation}
+A = \!\int\! c\,\dd t, \quad
+t_R = \frac{1}{A}\!\int\! t\,c\,\dd t, \quad
+\sigma^2 = \frac{1}{A}\!\int\! (t-t_R)^2 c\,\dd t,
+\end{equation}
+%
+the apparent \emph{plate count} and the \emph{resolution} between two peaks are
+%
+\begin{equation}
+N = \frac{t_R^2}{\sigma^2}, \qquad
+R_s = \frac{2\,|t_{R,b}-t_{R,a}|}{w_a + w_b}, \quad w = 4\sigma.
+\label{eq:plates}
+\end{equation}
+%
+The plate count $N$ measures efficiency (how narrow a band the column produces);
+the resolution $R_s$ measures how cleanly two bands are separated, with
+$R_s\gtrsim 1.5$ the usual target for baseline separation.
+
+%==============================================================================
+\section{The reduced equilibrium-dispersive model}
+\label{sec:legacy}
+
+For fast single-component, isocratic work the package retains the original
+equilibrium-dispersive model (\code{models/chromatography/legacy.py}). Here the
+fast-equilibrium closure is used: $q = H(m,\mathrm{pH})\,c$ is substituted into
+the mass balance, and the time derivative of the bound phase is folded into a
+\emph{retardation factor}
+%
+\begin{equation}
+R(m,\mathrm{pH}) = 1 + \frac{1-\eps}{\eps}\,H(m,\mathrm{pH}),
+\label{eq:retard}
+\end{equation}
+%
+leaving a single scalar transport equation per component,
+%
+\begin{equation}
+R\,\pdv{c}{t} = -\,u\,\pdv{c}{z} + D_{\mathrm{ap}}\,\pdv[2]{c}{z}.
+\label{eq:ed}
+\end{equation}
+%
+The retardation factor is the ratio of the velocity of the unretained solvent to
+that of the protein band: a band with $R=100$ moves through the column a hundred
+times more slowly than the mobile phase. Because $H$ for a strongly retained
+protein can reach $10^4$, $R$ can be enormous, which is the origin of the
+stiffness noted in Section~\ref{sec:engine} and the reason the integrator is
+again BDF. The ED model uses the same linearised SMA Henry
+constant~\eqref{eq:smahenry} and is restricted to a constant modulator; it is
+faster than the full engine precisely because it carries one field per component
+instead of two plus the modulator.
+
+%==============================================================================
+\section{Resolving the mass-transfer mechanism: the general rate model}
+\label{sec:grm}
+
+The transport-dispersive engine of Section~\ref{sec:engine} lumps every
+mass-transfer resistance into a single linear-driving-force coefficient
+$k_{m,i}$. That is adequate when one only wants band positions and an effective
+plate count, but it conflates two physically distinct resistances---the external
+\emph{film} (boundary layer) around each bead and the \emph{pore diffusion}
+inside it---and, being a stiff lumped sink, it can defeat the method-of-lines
+integrator: for strongly bound bands under steep gradients the adaptive
+\textsc{bdf} solver can take a step that drives the protein band negative and
+then to zero, \emph{silently losing the entire injected mass}
+(Figure~\ref{fig:grm-cons}, red). The package therefore provides a second,
+independent solver---a \emph{general rate model} (GRM) discretised by the finite
+volume method through the \code{PyFVTool} library
+(\code{models/chromatography/grm.py})---that both resolves the mechanism and is
+mass-conservative by construction.
+
+\subsection{Governing equations}
+
+The GRM keeps the bulk (interstitial) balance of Section~\ref{sec:engine} but now
+couples it, through a film boundary layer, to a \emph{resolved} radial diffusion
+problem inside a representative spherical bead at each axial location. For each
+component $i$,
+%
+\begin{align}
+\text{bulk:}\quad
+&\pdv{c_i}{t} = -u\,\pdv{c_i}{z} + D_{\mathrm{ax}}\,\pdv[2]{c_i}{z}
+  - \frac{1-\eps}{\eps}\,\frac{3}{R_p}\,k_{f,i}\,
+    \bigl(c_i - c_{p,i}\big|_{r=R_p}\bigr),
+\label{eq:grm-bulk}\\[0.3em]
+\text{particle:}\quad
+&\eps_p\,\pdv{c_{p,i}}{t} + (1-\eps_p)\,\pdv{q_i}{t}
+  = \eps_p D_{p,i}\,\frac{1}{r^2}\pdv{}{r}\!\left(r^2 \pdv{c_{p,i}}{r}\right),
+\label{eq:grm-part}
+\end{align}
+%
+with the adsorbed loading $q_i = \qstar_i(\bm c_p, m, \mathrm{pH})$ given by the
+\emph{same} isotherm~\eqref{eq:langmuir} as the lumped engine, so every mode and
+the competitive multi-component case carry over unchanged. The two new boundary
+conditions on the bead express film continuity at the surface and symmetry at the
+centre,
+%
+\begin{equation}
+\eps_p D_{p,i}\left.\pdv{c_{p,i}}{r}\right|_{r=R_p}
+  = k_{f,i}\bigl(c_i - c_{p,i}\big|_{r=R_p}\bigr),
+\qquad
+\left.\pdv{c_{p,i}}{r}\right|_{r=0} = 0.
+\label{eq:grm-bc}
+\end{equation}
+%
+The modulator $m$ is an unretained tracer; it is advanced on the bulk mesh and
+taken to equilibrate instantly within the pores (pore modulator $=$ bulk
+modulator at that axial location), which decouples it from the protein solve.
+
+\subsection{Mechanistic mass-transfer parameters}
+
+The two resistances are given physical, correlation-based defaults
+(\code{film\_coefficient}, overridable by direct input). The \emph{film}
+coefficient follows the Wilson--Geankoplis packed-bed correlation,
+%
+\begin{equation}
+\eps\,\mathrm{Sh} = 1.09\,\mathrm{Re}^{1/3}\mathrm{Sc}^{1/3},
+\qquad
+k_{f} = \frac{\mathrm{Sh}\,D_m}{d_p},
+\label{eq:wilson}
+\end{equation}
+%
+with $\mathrm{Re}=\rho u_s d_p/\mu$ (superficial velocity $u_s=\eps u$),
+$\mathrm{Sc}=\mu/\rho D_m$, $d_p=2R_p$, and $D_m$ the free-solution diffusivity.
+The external specific area is $a_v = 3(1-\eps)/R_p$. The intraparticle transport
+is set by the \emph{pore diffusivity} $D_{p,i}$ (defaulting to
+$\eps_p D_m/\tau$ with tortuosity $\tau$). Together these make
+``boundary-layer'' and ``inside-the-bead'' resistances separately tunable and
+physically grounded, and Figure~\ref{fig:grm-prof} shows the radial profiles the
+model resolves---a steep surface-to-centre gradient that the lumped model cannot
+represent.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.78\linewidth]{grm_intraparticle.png}
+\caption[Resolved intraparticle profiles]{Pore-phase concentration $c_p(r)$
+inside the bead at four column positions, during loading, computed by
+\code{run\_grm}. Each bead shows the surface-to-centre gradient set by the film
+and pore-diffusion resistances; beads deeper in the column (toward the outlet)
+are less loaded. This radial structure is the mechanistic content the general
+rate model adds over the lumped LDF engine.}
+\label{fig:grm-prof}
+\end{figure}
+
+\subsection{Finite-volume discretisation and exact conservation}
+
+The bulk axial operators (upwind convection, central dispersion) are built on a
+Cartesian grid and the radial operator on a spherical grid, both with
+\code{PyFVTool}; the bulk and the per-axial-cell bead problems are assembled into
+one global sparse system and advanced \emph{fully implicitly} (backward Euler),
+with the competitive isotherm linearised by Picard iteration each step. Two
+details secure machine-precision conservation. First, the bulk$\leftrightarrow$
+bead film exchange is written so the \emph{identical} discrete flux appears as a
+sink in the bulk cell and a source in the bead surface cell. Second---a subtle
+point---\code{PyFVTool}'s spherical \code{cellvolume} is the midpoint
+approximation $4\pi r_c^2\Delta r$, whereas its diffusion operator conserves
+against the \emph{true} shell volume $\tfrac43\pi(r_{\mathrm{out}}^3 -
+r_{\mathrm{in}}^3)$; the GRM uses the true shell volume for all mass accounting
+and film normalisation. Finally, the adsorption is discretised in
+\emph{storage form},
+%
+\begin{equation}
+\frac{\bigl[\eps_p c_{p,i} + (1-\eps_p)\qstar_i(\bm c_p,m)\bigr]^{n+1}
+      - \bigl[\eps_p c_{p,i} + (1-\eps_p)\qstar_i(\bm c_p,m)\bigr]^{n}}{\Delta t}
+= \eps_p D_{p,i}\nabla_r^2 c_{p,i}^{\,n+1},
+\label{eq:grm-storage}
+\end{equation}
+%
+i.e.\ the change in \emph{stored} mass is differenced exactly rather than through
+a Jacobian increment. Because the old storage is evaluated at the old modulator,
+this single device captures both the nonlinear isotherm \emph{and} the changing
+gradient with no separate $\dd q/\dd t$ source term, and conserves mass to
+machine precision.
+
+\subsection{Verification and comparison}
+
+On a benign gradient where the lumped engine is reliable, the two solvers agree
+closely (Figure~\ref{fig:grm-val}), validating the GRM. On a stiff,
+strongly-bound gradient the difference is decisive (Figure~\ref{fig:grm-cons}):
+the method-of-lines engine loses $100\%$ of the injected mass (its outlet is
+identically zero), while the GRM conserves to a relative closure error of
+$\sim\!10^{-11}$ and returns the physically correct eluting band. This is the
+regime---competitive, strongly-retained, multi-component gradient
+elution---that motivated the second solver.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.82\linewidth]{grm_vs_mol_validation.png}
+\caption[GRM/MoL validation]{On a benign single-component gradient the
+method-of-lines (lumped LDF) and general rate model solvers produce essentially
+the same chromatogram, validating the finite-volume GRM against the established
+engine.}
+\label{fig:grm-val}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{grm_conservation.png}
+\caption[GRM/MoL mass conservation]{A stiff, strongly-bound gradient.
+\emph{Left:} the method-of-lines engine's band vanishes---it loses all the
+injected mass---while the GRM returns a proper eluting peak. \emph{Right:} the
+mass-balance closure error (log scale): $\sim\!100\%$ for the MoL engine in this
+regime versus $\sim\!10^{-11}$ for the conservative finite-volume GRM.}
+\label{fig:grm-cons}
+\end{figure}
+
+\begin{remark}
+The GRM is the more faithful and more robust model, at a higher cost: it carries
+$n_c(N_z + N_z N_r)$ unknowns plus the modulator and solves a coupled implicit
+system each step. The lumped engine remains the right tool for fast design-space
+sweeps in benign regimes; the GRM is the reference for mechanism studies, for
+mass-transfer-limited separations, and wherever the lumped solver's conservation
+is in doubt.
+\end{remark}
+
+%==============================================================================
+\section{Consolidated limits of validity}
+\label{sec:limits-summary}
+
+\begin{limitbox}{the model family as a whole}
+\begin{itemize}
+  \item \textbf{Lumped dispersion and mass transfer.} Pore diffusion, film
+  resistance, and eddy dispersion are not resolved individually; they are
+  represented by the apparent dispersion $D_{\mathrm{ap}}$ and the LDF
+  coefficient $k_{m,i}$. The model reproduces band \emph{shapes} and
+  \emph{positions}, not the microscopic transport that underlies them.
+  \item \textbf{Isothermal, single-phase, one-dimensional.} The column is taken
+  as radially uniform and at constant temperature; wall effects, channelling,
+  and thermal gradients are absent.
+  \item \textbf{Constitutive simplifications.} Each affinity law is the dominant
+  empirical dependence of its mode, calibrated over a finite window; saturation
+  capacities are constant, and steric, conformational, and Hofmeister effects
+  are absorbed into effective constants.
+  \item \textbf{Numerical caveats.} First-order upwinding adds grid dispersion,
+  so the cell count participates in setting band width; and for very strong
+  binding under steep gradients the stiff integration can lose mass for the
+  most-retained bands unless dispersion and solver tolerances are chosen with
+  care. The robust regime is moderate binding with adequate dispersion.
+\end{itemize}
+Within these bounds the models are fit for their purpose: to serve as a fast,
+differentiable, physically faithful oracle whose response to the critical
+process parameters has the right shape and the right sensitivities---which is all
+that the experimental-design methods of the next chapter require.
+\end{limitbox}

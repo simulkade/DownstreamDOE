@@ -1,0 +1,543 @@
+\chapter{The Methods of Experimental Design}
+\label{ch:design}
+
+\begin{quote}\itshape
+``To consult the statistician after an experiment is finished is often merely to
+ask him to conduct a post-mortem examination. He can perhaps say what the
+experiment died of.'' --- R.~A.~Fisher.
+\end{quote}
+
+\noindent
+A mechanistic model, however faithful, is silent until it is \emph{queried}. The
+science of \emph{how} to query it---which combinations of process conditions to
+evaluate, in what order, and how to turn the results into knowledge---is
+\emph{Design of Experiments}. In a development setting the same model is the
+oracle of Chapter~\ref{ch:models} or a real wet-lab run; the design methods are
+identical. This chapter presents the four families the package implements, in the
+order one typically reaches for them: \emph{full factorial designs} with
+response-surface analysis (Section~\ref{sec:factorial}) for screening and
+robustness; \emph{Latin hypercube sampling} (Section~\ref{sec:lhs}) for
+space-filling exploration; \emph{latent-variable analysis}---PCA and
+PLS---(Section~\ref{sec:mv}) for understanding a high-dimensional design table;
+and \emph{Bayesian optimisation} (Section~\ref{sec:bo}) for adaptively hunting an
+optimum. Section~\ref{sec:design-compare} compares them.
+
+A common vocabulary, borrowed from \emph{Quality by Design} (QbD), runs through
+all four. The inputs we vary are the \emph{critical process parameters} (CPPs):
+load pH, salt, gradient slope, load density. The outputs we measure are the
+\emph{critical quality attributes} (CQAs) and performance metrics: yield, purity,
+productivity. The region of CPP space within which the CQAs remain acceptable is
+the \emph{design space}, and the project of process characterisation is to map
+it. In the package a CPP is a \code{Factor}---a name and a physical low/high
+bound---and every design is generated over a list of such factors.
+
+%==============================================================================
+\section{Full factorial designs and response-surface analysis}
+\label{sec:factorial}
+
+\subsection{Constructing the design}
+
+A \emph{two-level full factorial} design evaluates every combination of the
+extreme settings of each factor. With $k$ factors this is $2^k$ runs. Each factor
+is expressed in \emph{coded} units that map its physical low and high to $-1$ and
+$+1$; the affine decoding (method \code{Factor.decode}) is
+%
+\begin{equation}
+x_{\mathrm{phys}}
+= \underbrace{\tfrac{1}{2}(x_{\mathrm{hi}}+x_{\mathrm{lo}})}_{\text{centre } c_0}
++ x_{\mathrm{coded}}\cdot
+\underbrace{\tfrac{1}{2}(x_{\mathrm{hi}}-x_{\mathrm{lo}})}_{\text{half-range } \Delta}.
+\label{eq:decode}
+\end{equation}
+%
+Coding is not cosmetic: it makes the design \emph{orthogonal}, so that the
+estimated effects are statistically independent (their estimates do not change as
+terms are added or dropped) and directly comparable in magnitude. The package's
+\code{full\_factorial} enumerates the $2^k$ (or, at three levels, $3^k$) coded
+points with \code{itertools.product} and decodes them. Optional replicated
+\emph{centre points}, placed at every factor's midpoint, are appended; they serve
+two purposes---they provide an estimate of \emph{pure experimental error} from
+replication, and, by comparing the centre response to the factorial average, a
+test for \emph{curvature}. Finally the run order is randomised (with a fixed
+seed) so that any uncontrolled time trend is converted into noise rather than
+bias. The geometry is the familiar cube of Figure~\ref{fig:cube}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.6\linewidth]{factorial_cube.png}
+\caption[The $2^3$ factorial design]{A $2^3$ full-factorial design in three
+coded factors: the eight vertices of the cube plus a replicated centre point.
+Every main effect and every interaction is estimable, and the design is
+orthogonal and rotatable about the centre.}
+\label{fig:cube}
+\end{figure}
+
+\subsection{The response-surface model}
+
+The responses are analysed (\code{doe/analysis.py}) by ordinary least squares,
+fitting a polynomial \emph{response surface}. For the general second-order model,
+%
+\begin{equation}
+y = \beta_0
+  + \sum_{i} \beta_i x_i
+  + \sum_{i<j} \beta_{ij} x_i x_j
+  + \sum_i \beta_{ii} x_i^2
+  + \varepsilon,
+\qquad \varepsilon \sim \mathcal N(0,\sigma^2),
+\label{eq:rsm}
+\end{equation}
+%
+where the $\beta_i$ are \emph{main effects}, the $\beta_{ij}$ \emph{two-factor
+interactions}, and the $\beta_{ii}$ \emph{quadratic} (curvature) terms. The model
+is built programmatically in Wilkinson--Rogers notation and fitted with
+\code{statsmodels}; main effects and interactions are included by default,
+quadratics on request (the latter requiring a three-level or central-composite
+design, since a two-level design cannot resolve curvature). In matrix form
+$\bm y = \bm X\bm\beta + \bm\varepsilon$, the least-squares estimate and its
+covariance are the classical
+%
+\begin{equation}
+\hat{\bm\beta} = (\bm X\transp\bm X)^{-1}\bm X\transp \bm y,
+\qquad
+\Var(\hat{\bm\beta}) = \sigma^2 (\bm X\transp\bm X)^{-1},
+\label{eq:ols}
+\end{equation}
+%
+and orthogonal coding makes $\bm X\transp\bm X$ diagonal, so each coefficient is
+estimated with the same, minimal variance.
+
+\subsection{Apportioning variance: the ANOVA}
+
+To judge which effects are real the package computes a \emph{Type-II analysis of
+variance} (\code{anova\_lm(\dots, typ=2)}). Total variability in the response is
+partitioned into a part explained by each term and an unexplained residual; the
+significance of a term is judged by an $F$-ratio comparing its mean square to the
+residual mean square,
+%
+\begin{equation}
+F = \frac{\mathrm{SS}_{\text{effect}}/\mathrm{df}_{\text{effect}}}
+         {\mathrm{SS}_{\text{residual}}/\mathrm{df}_{\text{residual}}}.
+\end{equation}
+%
+The Type-II sum of squares measures each effect \emph{adjusted for all others of
+equal or lower order}, which is the correct choice for the orthogonal factorial
+designs used here and is standard in process-characterisation practice.
+
+\subsection{Proven acceptable ranges}
+
+The practical output of a robustness study is, for each factor, the range over
+which it may drift while the response stays in specification---its \emph{proven
+acceptable range} (PAR). The package (\code{proven\_acceptable\_ranges}) derives
+a univariate PAR by inverting the fitted surface: holding all other factors at
+their centre, it scans factor $x_i$ across its studied range and reports the
+sub-range over which the prediction satisfies $\mathrm{spec}_{\mathrm{lo}} \le
+\hat y(x_i) \le \mathrm{spec}_{\mathrm{hi}}$. It is a first-order, one-factor-at-a-
+time reading of the model; a genuinely multivariate design space is read instead
+from the response-surface contours.
+
+\begin{prosbox}{factorial designs}
+\begin{itemize}
+  \item \textbf{Orthogonal and efficient.} Every main effect and interaction is
+  estimated independently and with minimum variance; the analysis is transparent
+  and the coefficients are directly interpretable.
+  \item \textbf{Interactions, by construction.} Unlike one-factor-at-a-time
+  experimentation, a factorial reveals how factors combine---often the most
+  important finding of a study.
+  \item \textbf{Built-in diagnostics.} Centre points give a model-free estimate
+  of error and a curvature check; the ANOVA gives formal significance tests.
+  \item \textbf{Regulatory pedigree.} Factorial and response-surface designs are
+  the lingua franca of QbD submissions.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{factorial designs}
+\begin{itemize}
+  \item \textbf{Exponential cost.} $2^k$ (or $3^k$) runs become prohibitive
+  beyond a handful of factors; fractional factorials trade this against
+  \emph{confounding} of effects, which a full design avoids only at full cost.
+  \item \textbf{Low-order model.} A polynomial surface captures gentle curvature
+  but not the sharp, threshold-like responses a mechanistic model can
+  produce---it is a local approximation, valid inside the studied box.
+  \item \textbf{Corners only (two-level).} With no interior points a two-level
+  design cannot detect curvature at all; it must be augmented to a three-level or
+  central-composite design.
+  \item \textbf{Static.} The whole design is committed up front; it does not
+  learn from early results.
+\end{itemize}
+\end{consbox}
+
+%==============================================================================
+\section{Space-filling: Latin hypercube sampling}
+\label{sec:lhs}
+
+When the goal is to \emph{explore} a response over its whole domain---to build a
+surrogate, or to feed a global sensitivity analysis---rather than to fit a
+low-order polynomial at the corners, one wants points spread as evenly as
+possible through the interior. Placing them on a full grid is infeasible (the
+curse of dimensionality: $\ell$ levels in $k$ dimensions is $\ell^k$ points), and
+independent random sampling leaves clumps and gaps. \emph{Latin hypercube
+sampling} (LHS) is the standard compromise.
+
+\subsection{Construction}
+
+An LHS of $n$ points in $k$ dimensions partitions each axis into $n$ equal
+intervals and places exactly one point in each interval of each axis: a
+\emph{Latin square} generalised to $k$ dimensions. The marginal projection onto
+any single factor is therefore perfectly stratified---every one of the $n$ bins
+is occupied---no matter how large $k$ is. Formally, with $\pi_1,\dots,\pi_k$
+independent random permutations of $\{0,\dots,n-1\}$ and $U_{ij}\sim\mathcal
+U[0,1)$,
+%
+\begin{equation}
+x_{ij} = \frac{\pi_j(i) + U_{ij}}{n},
+\end{equation}
+%
+scaled afterwards to the physical bounds (\code{qmc.scale}). Plain LHS guarantees
+good \emph{one}-dimensional projections but can still correlate factors or leave
+multi-dimensional voids; the package therefore uses
+\code{scipy.stats.qmc.LatinHypercube} with the \code{"random-cd"} criterion,
+which permutes the design to minimise the \emph{centered $L_2$ discrepancy}---a
+global measure of departure from uniformity,
+%
+\begin{equation}
+D_{\mathrm{CD}}^2 =
+\left(\tfrac{13}{12}\right)^{k}
+- \frac{2}{n}\sum_{i=1}^{n}\prod_{j=1}^{k}
+  \Bigl(1 + \tfrac12|x_{ij}-\tfrac12| - \tfrac12|x_{ij}-\tfrac12|^2\Bigr)
++ \frac{1}{n^2}\sum_{i=1}^{n}\sum_{l=1}^{n}\prod_{j=1}^{k}
+  \Bigl(1 + \tfrac12|x_{ij}-\tfrac12| + \tfrac12|x_{lj}-\tfrac12|
+        - \tfrac12|x_{ij}-x_{lj}|\Bigr).
+\label{eq:cd}
+\end{equation}
+%
+Lower discrepancy means more uniform coverage in \emph{all} projections at once.
+
+\subsection{Coverage diagnostics}
+
+The package (\code{coverage\_metrics}) reports the centered discrepancy of
+Eq.~\eqref{eq:cd} together with the minimum and mean pairwise Euclidean distance
+between points (on factors normalised to the unit cube). A good space-filling
+design has low discrepancy and a large minimum distance (no two points crowd
+together). Figure~\ref{fig:lhs} contrasts an optimised LHS with an
+equal-sized random sample: the random design clumps and gaps, while the LHS
+covers the square evenly and achieves a markedly lower discrepancy.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.92\linewidth]{lhs_vs_random.png}
+\caption[LHS versus random sampling]{Twenty points in a two-factor space.
+\emph{Left:} independent random sampling, which leaves visible clusters and
+voids. \emph{Right:} an optimised Latin hypercube, which both stratifies every
+marginal and achieves a lower centered discrepancy $D_{\mathrm{CD}}$. The
+advantage widens as the dimension grows.}
+\label{fig:lhs}
+\end{figure}
+
+\begin{prosbox}{Latin hypercube sampling}
+\begin{itemize}
+  \item \textbf{Dimension-robust uniformity.} Perfect one-dimensional
+  stratification for any $n$ and $k$, with $n$ chosen freely (not tied to
+  $\ell^k$).
+  \item \textbf{Ideal surrogate-training data.} Even interior coverage is exactly
+  what a Gaussian process or other global model needs.
+  \item \textbf{Projection-friendly.} If some factors turn out inert, the design
+  remains well-spread in the active subspace.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{Latin hypercube sampling}
+\begin{itemize}
+  \item \textbf{No structured estimability.} It is not built to estimate specific
+  polynomial effects; there is no clean ANOVA decomposition.
+  \item \textbf{Optimisation needed for high dimensions.} Naive LHS can still
+  correlate factors; the discrepancy-minimising step is essential and costs
+  search time.
+  \item \textbf{Not adaptive.} Like the factorial it is a one-shot design that
+  does not concentrate effort where the response is interesting.
+  \item \textbf{Edge under-sampling.} Points sit at bin centres, so the extreme
+  corners of the domain---sometimes the most important---are sampled less than in
+  a factorial.
+\end{itemize}
+\end{consbox}
+
+%==============================================================================
+\section{Latent-variable analysis: PCA and PLS}
+\label{sec:mv}
+
+Once a design table exists---factors and responses, possibly many of each, on
+different scales and correlated---one needs tools to \emph{see} its structure and
+to relate inputs to outputs. The package provides the two workhorses of
+multivariate process analysis (\code{doe/multivariate.py}), both of which begin by
+\emph{auto-scaling} every column to zero mean and unit variance so that variables
+of different physical units contribute on equal footing.
+
+\subsection{Principal-component analysis}
+
+PCA finds the orthogonal directions of greatest variance in the (scaled) factor
+matrix $\bm X$. It factorises
+%
+\begin{equation}
+\bm X_s = \bm T \bm P\transp + \bm E,
+\end{equation}
+%
+where the columns of the \emph{loadings} $\bm P$ are the eigenvectors of the
+sample covariance $\tfrac{1}{n-1}\bm X_s\transp\bm X_s$, ordered by decreasing
+eigenvalue, and the \emph{scores} $\bm T = \bm X_s\bm P$ are the coordinates of
+each run in the new, decorrelated basis. The fraction of total variance carried
+by component $a$ is $\lambda_a / \sum_b \lambda_b$ (the
+\code{explained\_variance\_ratio}); the first few components usually capture most
+of it, so a high-dimensional table can be \emph{visualised} in two or three score
+dimensions, with clusters, trends, and outliers made plain.
+
+\subsection{Partial least squares}
+
+PCA looks only at $\bm X$. To \emph{relate} factors to responses one wants the
+directions in $\bm X$ that best predict $\bm Y$, and that is PLS. It builds a
+shared set of latent variables that decompose both blocks,
+%
+\begin{equation}
+\bm X_s = \bm T \bm P\transp + \bm E,
+\qquad
+\bm Y_s = \bm T \bm Q\transp + \bm F,
+\end{equation}
+%
+choosing, at each step, the weight vector $\bm w$ that maximises the covariance of
+the projected factors with the responses,
+%
+\begin{equation}
+\bm w_a = \arg\max_{\|\bm w\|=1}\;
+\Cov\!\bigl(\bm X_s \bm w,\; \bm Y_s \bm c\bigr).
+\end{equation}
+%
+Two diagnostics make PLS the standard tool of chemometrics and QbD. The first is
+the \emph{Variable Importance in Projection}, which ranks how much each factor
+contributes to the prediction,
+%
+\begin{equation}
+\mathrm{VIP}_j = \sqrt{\,p \sum_{a}
+  \frac{\mathrm{SS}_a}{\sum_b \mathrm{SS}_b}
+  \left(\frac{w_{ja}}{\|\bm w_a\|}\right)^{\!2}},
+\qquad
+\mathrm{SS}_a = (\bm t_a\transp\bm t_a)(\bm q_a\transp\bm q_a),
+\label{eq:vip}
+\end{equation}
+%
+where $p$ is the number of factors; a factor with $\mathrm{VIP}_j>1$ is more
+important than average. The second is the cross-validated coefficient of
+prediction $Q^2$: the data are split into $k$ folds, each held out in turn and
+predicted from a model fitted on the rest, and
+%
+\begin{equation}
+Q^2 = 1 - \frac{\sum_{\text{folds}} \|\bm y_{\text{test}}
+                 - \hat{\bm y}_{\text{test}}\|^2}
+               {\sum \|\bm y - \bar{\bm y}\|^2}.
+\end{equation}
+%
+Whereas the ordinary $R^2$ always rises as components are added, $Q^2$ measures
+genuine \emph{predictive} power and falls when the model begins to fit noise,
+giving an honest stopping rule for the number of latent variables.
+
+\begin{prosbox}{PCA / PLS}
+\begin{itemize}
+  \item \textbf{Handle collinearity.} Both thrive where ordinary regression
+  fails---many correlated factors, more variables than runs.
+  \item \textbf{Insight, not just prediction.} Score and loading plots reveal
+  structure; VIP ranks the drivers; $Q^2$ validates honestly.
+  \item \textbf{Multi-response.} PLS models several CQAs jointly, exploiting their
+  correlations.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{PCA / PLS}
+\begin{itemize}
+  \item \textbf{Linear, latent.} Both assume the structure lives in linear
+  combinations of the inputs; strong nonlinearity or interaction is captured only
+  by adding engineered terms.
+  \item \textbf{Scaling-dependent.} Results hinge on the (here automatic)
+  pre-scaling; a poor choice distorts the components.
+  \item \textbf{Indirect interpretation.} Latent variables are mathematical
+  constructs, not physical knobs; the VIP and loadings need careful reading.
+\end{itemize}
+\end{consbox}
+
+%==============================================================================
+\section{Adaptive design: Bayesian optimisation}
+\label{sec:bo}
+
+Factorial and space-filling designs are committed in advance. When experiments
+are expensive and the goal is to \emph{find the best} conditions rather than to
+characterise the whole space, one can do far better by choosing each new
+experiment in light of all previous ones. This is \emph{Bayesian optimisation}
+(BO), and it is the package's most sophisticated design method
+(\code{optimization/}).
+
+\subsection{The Gaussian-process surrogate}
+
+BO maintains a probabilistic \emph{surrogate} of the response: a Gaussian process
+(GP). A GP places a distribution over functions such that any finite set of
+points is jointly Gaussian, specified by a mean (taken zero after
+standardisation) and a covariance \emph{kernel} $k(\bm x,\bm x')$. The package
+uses \code{botorch}'s \code{SingleTaskGP} with the default Mat\'ern-$5/2$ kernel,
+%
+\begin{equation}
+k(\bm x,\bm x') = \sigma_f^2
+\left(1 + \sqrt5\,r + \tfrac{5}{3} r^2\right)
+e^{-\sqrt5\, r},
+\qquad
+r = \sqrt{\textstyle\sum_d (x_d-x'_d)^2/\ell_d^2},
+\end{equation}
+%
+smooth enough for a chromatographic response surface yet not as rigid as the
+squared-exponential. Conditioned on the observed data
+$(\bm X,\bm y)$, the posterior at a new point $\bm x_\star$ is Gaussian with the
+closed-form mean and variance
+%
+\begin{align}
+\mu(\bm x_\star) &= \bm k_\star\transp (\bm K + \sigma_n^2 \bm I)^{-1}\bm y, \\
+s^2(\bm x_\star) &= k(\bm x_\star,\bm x_\star)
+  - \bm k_\star\transp (\bm K + \sigma_n^2 \bm I)^{-1}\bm k_\star,
+\end{align}
+%
+where $\bm K_{ij}=k(\bm x_i,\bm x_j)$ and $(\bm k_\star)_i = k(\bm x_i,\bm
+x_\star)$. The crucial output is not just the prediction $\mu$ but the
+\emph{uncertainty} $s$, which is large where data are sparse. The kernel
+hyperparameters---the length scales $\ell_d$, signal variance $\sigma_f^2$, and
+noise $\sigma_n^2$---are fitted by maximising the exact marginal log-likelihood
+(\code{fit\_gpytorch\_mll}). The wrapper (\code{GPSurrogate}) normalises inputs to
+the unit cube and standardises outputs, then un-transforms predictions, so the
+caller works throughout in physical units.
+
+\subsection{The acquisition function}
+
+The surrogate is turned into a decision by an \emph{acquisition function} that
+scores how worthwhile it is to sample a candidate point, balancing
+\emph{exploitation} (sampling where the mean is high) against \emph{exploration}
+(sampling where the uncertainty is high). The package uses \emph{Expected
+Improvement} (EI): the expected amount by which a new observation would beat the
+current best $f^\star$,
+%
+\begin{equation}
+\mathrm{EI}(\bm x) = \E\!\bigl[\max(f(\bm x)-f^\star,\,0)\bigr]
+= (\mu-f^\star)\,\Phi(z) + s\,\phi(z),
+\qquad z = \frac{\mu-f^\star}{s},
+\label{eq:ei}
+\end{equation}
+%
+with $\Phi$ and $\phi$ the standard normal CDF and PDF. The first term rewards a
+high mean, the second a high variance; their balance is automatic and
+parameter-free. To avoid floating-point underflow when improvement is tiny, the
+package optimises the numerically stable \code{LogExpectedImprovement} over the
+domain (\code{optimize\_acqf}, multi-start L-BFGS-B), and evaluates the oracle at
+the maximiser.
+
+\subsection{The loop}
+
+The complete procedure (\code{bayesian\_optimization}) is:
+%
+\begin{enumerate}
+  \item \textbf{Seed} with $n_{\mathrm{initial}}$ Latin-hypercube points
+  (Section~\ref{sec:lhs}) and evaluate the oracle at each.
+  \item \textbf{Iterate}: fit the GP to all data; maximise EI to propose the next
+  point; evaluate the oracle there; append and repeat.
+\end{enumerate}
+%
+Constraints (for example, ``purity $\ge 0.95$'') are handled by a penalty: an
+infeasible evaluation is recorded with its objective set to zero so it cannot
+become the running best. The natural extension to true multi-objective
+exploration of a yield/purity \emph{Pareto front} is to swap EI for the expected
+hypervolume-improvement acquisition (qNEHVI); the surrogate machinery is
+unchanged.
+
+\subsection{Why it wins}
+
+Figure~\ref{fig:bo} shows the payoff. Against a one-shot factorial spending its
+runs on a fixed grid, the BO loop concentrates evaluations where the response is
+promising and climbs to the optimum in far fewer experiments. The package
+quantifies this with \emph{running-best} and \emph{regret} curves
+(\code{compare\_to\_doe}), the regret being the gap between the running best and
+the global best found by either method.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\linewidth]{bo_convergence.png}
+\caption[Bayesian optimisation versus a one-shot design]{Running-best objective
+versus number of experiments for Bayesian optimisation (blue) and a one-shot
+factorial design (red) on the same problem. After a short space-filling seed, BO
+exploits its surrogate to reach the optimum with markedly fewer evaluations---the
+advantage that matters most when each experiment is costly.}
+\label{fig:bo}
+\end{figure}
+
+\begin{prosbox}{Bayesian optimisation}
+\begin{itemize}
+  \item \textbf{Sample-efficient.} Reaches good optima in a fraction of the
+  experiments a fixed design needs---decisive when each run is expensive.
+  \item \textbf{Principled exploration.} The GP's uncertainty drives a rational
+  explore/exploit balance; no tuning of a trade-off parameter.
+  \item \textbf{Built-in uncertainty.} The surrogate yields calibrated error
+  bars, useful in their own right, and extends cleanly to constraints and
+  multiple objectives.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{Bayesian optimisation}
+\begin{itemize}
+  \item \textbf{Sequential.} Each step needs the previous result, so it cannot be
+  fully parallelised without batch acquisitions, and it ill suits campaigns where
+  experiments must be committed in blocks.
+  \item \textbf{Surrogate assumptions.} Performance rests on the GP being a fair
+  model; deceptive, discontinuous, or very high-dimensional landscapes degrade
+  it, and GP fitting scales cubically in the number of points.
+  \item \textbf{Optimum, not map.} It finds the best point, not an interpretable
+  effects table or a fully characterised design space---the deliverable a
+  regulatory filing expects.
+  \item \textbf{Less transparent.} The decision logic is harder to explain to
+  reviewers than a factorial ANOVA.
+\end{itemize}
+\end{consbox}
+
+%==============================================================================
+\section{Choosing among the methods}
+\label{sec:design-compare}
+
+The four families are complements, not rivals, and a mature characterisation
+campaign uses them in sequence (Table~\ref{tab:compare}). One \emph{screens} many
+candidate factors with a (fractional) factorial to find the vital few; one
+\emph{explores} the reduced space with an LHS and \emph{understands} it with
+PCA/PLS; one \emph{optimises} within it with BO; and one \emph{characterises} the
+final design space with a response-surface design for the filing. The same
+mechanistic oracle of Chapter~\ref{ch:models} drives them all, which is precisely
+the point of a virtual laboratory: it lets one rehearse this entire strategy,
+and quantify its uncertainty, before committing a single millilitre of resin.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\caption{The experimental-design methods at a glance.}
+\label{tab:compare}
+\begin{tabular}{@{}p{0.20\linewidth} p{0.26\linewidth} p{0.22\linewidth}
+                  p{0.22\linewidth}@{}}
+\toprule
+\textbf{Method} & \textbf{Primary purpose} & \textbf{Adaptive?} &
+\textbf{Best when} \\
+\midrule
+Full factorial / RSM & Estimate effects, interactions, design space &
+No (one-shot) & Few factors; need interpretable, defensible effects \\
+Latin hypercube & Space-filling exploration; surrogate training data &
+No (one-shot) & Building a global model; moderate-to-many factors \\
+PCA / PLS & Understand structure; rank factors; relate $X\!\to\!Y$ &
+Analysis step & Many correlated factors and responses \\
+Bayesian optimisation & Find the optimum in fewest runs &
+Yes (sequential) & Experiments are expensive; goal is an optimum \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keybox}{The throughline}
+A faithful model (Chapter~\ref{ch:models}) and an efficient way to query it
+(Chapter~\ref{ch:design}) are two halves of one instrument. The model supplies
+\emph{physics}---the right shape and sensitivities of the response; the designs
+supply \emph{strategy}---which questions to ask and how to learn from the
+answers. Together they turn process development from a sequence of expensive
+guesses into a directed, quantifiable search.
+\end{keybox}

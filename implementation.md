@@ -90,6 +90,128 @@ where `c_feed = 1 g/L` is fixed (a representative chromatography feed).
 
 ---
 
+### 1.1b Multi-mode chromatography engine (`models/chromatography/`)
+
+The single-component isocratic model above (`legacy.py`, kept verbatim for backward
+compatibility) is generalised into a **transport-dispersive engine** (`engine.py`) that
+covers every common downstream mode and supports **gradient elution**.  The original module
+is now a package; `from downstream_doe.models.chromatography import …` resolves the same
+legacy names plus the new API.
+
+#### Unified governing equations (linear driving force)
+
+Per finite-volume cell the state is `[c_i, q_i, m]` (mobile, stationary, modulator):
+
+```
+modulator   :  ∂m/∂t   = −u·∂m/∂z + D·∂²m/∂z²                     (unretained tracer)
+mobile  c_i :  ∂c_i/∂t = −u·∂c_i/∂z + D·∂²c_i/∂z² − φ·∂q_i/∂t      φ = (1−ε)/ε
+stationary  :  ∂q_i/∂t = k_m,i·(q*_i(c, m, pH) − q_i)             (LDF mass transfer)
+```
+
+Carrying `q` **explicitly** (instead of folding the isotherm into a constant retardation
+factor) is the key design choice: it lets the inlet modulator vary in time without a
+`dH/dt` source term and without a per-cell equilibrium (Newton) solve.  The
+equilibrium-dispersive limit is recovered as `k_m → ∞`; finite `k_m` adds the mass-transfer
+band broadening that sets the plate count, so it doubles as a "resolution knob".
+
+#### One isotherm core, mode = modulator law (`isotherms.py`)
+
+Every mode uses one explicit, multi-component competitive-Langmuir equilibrium,
+
+```
+q*_i = q_max,i·b_i(m,pH)·c_i / (1 + Σ_j b_j(m,pH)·c_j)      (nonlinear / overload)
+q*_i = H_i·c_i,   H_i = q_max,i·b_i                          (linear / dilute, Henry)
+```
+
+and only the affinity law `b_i(m,pH)` changes:
+
+| Mode | modulator `m` | `b_i(m,pH)` | Elutes by |
+|---|---|---|---|
+| CEX / AEX (`SMALaw`) | salt (mM) | `β_i·(Λ/m)^ν_i·exp(ν_pH,i·(pH−pH_ref))` | increasing salt |
+| HIC (`SaltingOutLaw`) | salt (mM) | `β_i·exp(K_s,i·m)` | decreasing salt |
+| RP-HPLC (`LinearSolventStrengthLaw`) | organic φ | `β_i·exp(−S_i·φ)` | increasing φ |
+
+CEX vs AEX differ only in the sign of `ν_pH` (presets in `modes.py`).  In the dilute limit
+`H_i = q_max,i·b_i` reproduces the legacy linearised SMA Henry constant exactly, so the
+original tests and the DoE/UQ layers are unaffected.  "High-resolution IEX" is simply the
+SMA law run nonlinear (finite `q_max`, competition) on a fine grid under a shallow gradient.
+
+#### Elution program — the "linearly changing eluate" (`program.py`)
+
+`ElutionProgram` is an ordered list of `Segment`s sized in **column volumes**, each holding
+or **linearly ramping** the modulator (the gradient).  `Injection.from_load_density`
+reuses the legacy `V_inject = load_density·V_resin / c_feed` logic to size the feed pulse.
+`compile()` converts CV to seconds via `t_CV = V_c/Q = L/(u·ε)` and yields the inlet
+`m_in(t)` (piecewise-linear, step-aware) and feed `c_in(t)`.
+
+#### Numerics
+
+Same method-of-lines discretisation as the legacy model (upwind convection, central
+dispersion, Dirichlet inlet, zero-gradient outlet), integrated with stiff `BDF`.  Because
+strong binding makes the system very stiff, a **Jacobian sparsity pattern** is handed to the
+solver (`_jacobian_sparsity`): `c_i,j` couples to its transport neighbours and — through the
+competitive isotherm — to every component's `c` and the modulator in the *same* cell.  This
+replaces the dense finite-difference Jacobian with a few graph-coloured evaluations and cut
+a representative gradient run from ~17 s to ~1 s.  The modulator is floored at `1e-9` to keep
+the `(Λ/m)^ν` law finite under dispersion overshoot.
+
+#### Separation metrics (`metrics.py`)
+
+Beyond `pool_metrics`, `peak_moments` returns moment-based area / retention time / variance
+(robust to skewed gradient peaks), `plate_count` gives `N = t_R²/σ²`, and `resolution`
+computes `Rs = 2·Δt_R/(w_a+w_b)` with `w = 4σ`.
+
+---
+
+### 1.1c General Rate Model (`models/chromatography/grm.py`)
+
+A second, independent chromatography solver built on the **finite volume method** via
+[`PyFVTool`](https://github.com/FiniteVolumeTransportPhenomena/PyFVTool) (a Python port of
+JFVM.jl). It exists for two reasons the lumped method-of-lines (MoL) engine cannot serve:
+
+1. **Mechanistic mass transfer.** Instead of one lumped LDF coefficient `k_m`, the GRM
+   resolves the *film* (boundary-layer) resistance around each bead **and** the *pore
+   diffusion* inside it as a radial PDE per axial cell:
+
+   ```
+   bulk:     ∂c_i/∂t = -u ∂c_i/∂z + D_ax ∂²c_i/∂z² - (1-ε)/ε·(3/R_p)·k_f,i·(c_i - c_p,i|_R)
+   particle: ε_p ∂c_p,i/∂t + (1-ε_p) ∂q_i/∂t = ε_p D_p,i·(1/r²)∂_r(r² ∂_r c_p,i)
+   film BC:  ε_p D_p,i ∂c_p,i/∂r|_R = k_f,i (c_i - c_p,i|_R);   symmetry at r=0
+   ```
+
+   `k_f` defaults to the Wilson–Geankoplis correlation (`ε·Sh = 1.09 Re^⅓ Sc^⅓`), `D_p`
+   to `ε_p·D_m/τ`; both are overridable. The same `Isotherm` (CEX/AEX/HIC/RP, competitive
+   nonlinear) supplies `q* = q*(c_p, m, pH)`. The modulator is advanced separately on the
+   bulk mesh (unretained tracer) and assumed to equilibrate instantly in the pores.
+
+2. **Mass conservation.** The MoL engine's stiff BDF integration can drive a strongly-bound
+   band negative and lose the *entire* injected mass under steep gradients (observed: 100 %
+   loss). The GRM is **fully implicit** (backward Euler), assembling the coupled bulk +
+   per-cell bead system into one global sparse matrix, and is conservative to machine
+   precision.
+
+**Three numerical points that make it exact:**
+
+- **Identical-flux coupling.** The film exchange is added so the *same* discrete flux is a
+  sink in the bulk cell and a source in the bead surface cell → exact bulk↔bead balance.
+- **True shell volume.** PyFVTool's spherical `mesh.cellvolume` is the midpoint
+  approximation `4π r_c² Δr`, but `diffusionTerm` conserves against the *true* shell volume
+  `4/3·π(r_out³ − r_in³)`. The GRM uses the true shell volume for all mass accounting and
+  film normalisation. (Using `cellvolume` leaks ~1/Nr².)
+- **Storage-form adsorption.** The bead balance differences the change in *stored* mass
+  `[ε_p c_p + (1-ε_p) q*(c_p,m)]ⁿ⁺¹ − [...]ⁿ` exactly (Picard-linearised), rather than via
+  a `dq/dc` Jacobian increment. Because the old storage uses the old modulator, this single
+  device captures both the nonlinear isotherm and the changing gradient with **no separate
+  `dq/dt` source term**, and conserves mass exactly. (A Jacobian-increment discretisation
+  leaks mass that grows with binding strength; a separate `dq*/dm·dm/dt` source is only
+  O(Δt)-accurate.)
+
+The GRM is the reference for mechanism studies and mass-transfer-limited separations; the
+MoL engine remains the fast tool for benign design-space sweeps. Tests in `tests/test_grm.py`;
+the MoL-vs-GRM comparison is documented in `doc/` (Chapter 1, §"general rate model").
+
+---
+
 ### 1.2 UF/DF (`models/ufdf.py`)
 
 #### Flux model — gel + pressure
