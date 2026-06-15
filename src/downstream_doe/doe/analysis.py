@@ -19,6 +19,7 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 import statsmodels.formula.api as smf
 import statsmodels.stats.anova as sa
 
@@ -90,6 +91,133 @@ def fit_response_model(
         effects=model.params,
         factor_names=list(factors),
     )
+
+
+@dataclass
+class GLMResult:
+    """A fitted generalized linear response model and its goodness-of-fit.
+
+    Attributes
+    ----------
+    model:
+        The fitted ``statsmodels`` GLM results object.
+    family:
+        ``"binomial"`` (logistic) or ``"poisson"`` (log-linear).
+    effects:
+        Estimated coefficients on the linear-predictor (logit / log) scale.
+    deviance, null_deviance:
+        Residual and null deviance (the GLM analogue of RSS and total SS).
+    pseudo_r2:
+        McFadden's pseudo-:math:`R^2`, ``1 - llf/llnull`` -- 0 for a model no
+        better than the intercept, approaching 1 for a perfect fit.
+    factor_names:
+        Plain factor names (no interaction / quadratic terms).
+    """
+
+    model: object
+    family: str
+    effects: pd.Series
+    deviance: float
+    null_deviance: float
+    pseudo_r2: float
+    factor_names: list[str] = None
+
+
+def fit_glm_response(
+    data: pd.DataFrame,
+    response: str,
+    factors: Sequence[str],
+    *,
+    family: str = "binomial",
+    interactions: bool = True,
+    quadratic: bool = False,
+) -> GLMResult:
+    """Fit a generalized linear response model over the process factors.
+
+    Where :func:`fit_response_model` fits a continuous response by OLS, this fits
+    a response that is *not* continuous-and-normal through the appropriate link
+    (Chapter 1):
+
+    * ``family="binomial"`` -- logistic regression of a 0/1 outcome (e.g. "did the
+      run meet its purity/yield specification?"), modelling :math:`P(\\text{pass})`;
+    * ``family="poisson"`` -- log-linear regression of a count (e.g. "how many
+      impurity peaks contaminate the pool?"), modelling the expected count.
+
+    The formula is built programmatically in the same Wilkinson--Rogers notation
+    as :func:`fit_response_model` (main effects, optional two-way interactions and
+    quadratics), so a probabilistic *design space* may carry the same interaction
+    and curvature structure as a classical response surface.
+    """
+    fam = family.lower()
+    families = {
+        "binomial": sm.families.Binomial(),
+        "poisson": sm.families.Poisson(),
+    }
+    if fam not in families:
+        raise ValueError(f"family must be one of {sorted(families)}, got {family!r}")
+
+    terms: list[str] = list(factors)
+    if quadratic:
+        terms += [f"I({f}**2)" for f in factors]
+    if interactions:
+        terms += [f"{f1}:{f2}" for f1, f2 in itertools.combinations(factors, 2)]
+
+    # Patsy can't parse Python reserved words (e.g. "yield") as column names.
+    _RESPONSE_ALIAS = "__response__"
+    data_fit = data.copy()
+    data_fit[_RESPONSE_ALIAS] = data_fit[response]
+    formula = f"{_RESPONSE_ALIAS} ~ " + " + ".join(terms)
+
+    model = smf.glm(formula, data=data_fit, family=families[fam]).fit()
+    pseudo_r2 = float(1.0 - model.llf / model.llnull) if model.llnull != 0 else np.nan
+
+    return GLMResult(
+        model=model,
+        family=fam,
+        effects=model.params,
+        deviance=float(model.deviance),
+        null_deviance=float(model.null_deviance),
+        pseudo_r2=pseudo_r2,
+        factor_names=list(factors),
+    )
+
+
+def predict_glm_grid(
+    result: GLMResult,
+    x_factor: str,
+    y_factor: str,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    *,
+    n: int = 60,
+    fixed: dict[str, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate a fitted GLM on a 2-D grid of two factors.
+
+    Returns ``(X, Y, M)`` mesh arrays where ``M`` is the predicted *mean* on the
+    natural scale -- a probability for a binomial model, an expected count for a
+    Poisson one. Any factors other than ``x_factor`` / ``y_factor`` are held at
+    the values in ``fixed`` (default: their training-data means), so the surface
+    is a 2-D slice through the design space.  Thresholding ``M`` (e.g.
+    :math:`M \\ge 0.95`) yields the *probabilistic design space*.
+    """
+    model = result.model
+    orig = model.model.data.orig_exog
+    factor_cols = list(result.factor_names)
+
+    centres = {c: float(orig[c].mean()) for c in factor_cols}
+    if fixed:
+        centres.update(fixed)
+
+    xs = np.linspace(*x_range, n)
+    ys = np.linspace(*y_range, n)
+    X, Y = np.meshgrid(xs, ys)
+
+    grid = pd.DataFrame({c: np.full(X.size, centres[c]) for c in factor_cols})
+    grid[x_factor] = X.ravel()
+    grid[y_factor] = Y.ravel()
+    M = np.asarray(model.predict(grid)).reshape(X.shape)
+    return X, Y, M
 
 
 def proven_acceptable_ranges(

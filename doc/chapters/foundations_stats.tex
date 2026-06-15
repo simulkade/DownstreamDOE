@@ -1,0 +1,754 @@
+\chapter{Statistical Foundations}
+\label{ch:stats}
+
+\begin{quote}\itshape
+``The theory of probabilities is at bottom nothing but common sense reduced to
+calculus.'' --- P.-S.~Laplace.
+\end{quote}
+
+\noindent
+The chapters that follow lean on statistics at every turn: a response surface is
+\emph{fitted}, an effect is judged \emph{significant}, a design is called
+\emph{efficient}, a fermentation is described as \emph{variable} but a probe as
+\emph{uncertain}. Each of these words has a precise technical meaning, and a
+reader fluent in them will find the later mathematics not merely legible but
+inevitable. This chapter assembles that vocabulary from the ground up. It is
+deliberately self-contained---a working physical scientist who has not opened a
+statistics text since university should be able to read it straight
+through---but it is also curated: we develop \emph{exactly} the ideas that
+Chapters~\ref{ch:design} and~\ref{ch:ferment} use, and no more.
+
+Three threads run through the chapter. The first is the \emph{inferential leap}:
+we never see the truth, only a finite, noisy sample of it, and statistics is the
+disciplined art of saying what the sample does and does not tell us about the
+truth. The second is that every method here is, at bottom, an \emph{algorithm}
+one can write in a dozen lines; wherever a formula appears we also give the
+recipe that computes it, and point to the small teaching module
+(\code{downstream\_doe.foundations.stats\_demo}) from which this chapter's
+figures are in fact generated. The third is the distinction---fundamental to the
+whole monograph---between \emph{variability}, the irreducible spread of a real
+process, and \emph{uncertainty}, the fog of imperfect measurement.
+
+%==============================================================================
+\section{Populations, samples, and the inferential leap}
+\label{sec:stats-pop}
+
+Imagine every yogurt batch that a process \emph{could ever} produce under fixed
+settings. That infinite, hypothetical collection is the \emph{population}; the
+number we care about---say its true mean set-time---is a fixed but unknown
+\emph{parameter}, written with a Greek letter such as $\mu$. We cannot run
+infinitely many batches. We run a handful: a \emph{sample}
+$x_1,\dots,x_n$. Any number we compute from the sample, such as the sample mean
+$\bar x = \tfrac1n\sum_i x_i$, is a \emph{statistic}, and a statistic used to
+guess a parameter is an \emph{estimator}, written with a hat: $\hat\mu = \bar x$.
+
+The central fact---the inferential leap---is that the estimator is itself
+\emph{random}. Run a different five batches and $\bar x$ comes out different. An
+estimator therefore has its own distribution, the \emph{sampling distribution},
+and the whole of classical statistics is the study of how far an estimate is
+liable to sit from the parameter it estimates. An estimator is \emph{unbiased}
+if it is right \emph{on average}, $\E[\hat\mu]=\mu$; its scatter about that
+average is what a \emph{standard error} (Section~\ref{sec:stats-est}) measures.
+
+\begin{keybox}{The four words to keep straight}
+\emph{Population/parameter} (the unknowable truth, $\mu$) versus
+\emph{sample/statistic} (what we compute, $\bar x$). A \emph{parameter} is fixed;
+a \emph{statistic} is random because the sample is random. Estimation is the
+bridge from the second to the first, and it is never free of error---it can only
+be quantified.
+\end{keybox}
+
+%==============================================================================
+\section{The language of distributions}
+\label{sec:stats-dist}
+
+A \emph{random variable} $X$ is a quantity whose value is subject to chance.
+A \emph{continuous} random variable is described by its \emph{probability
+density function} (PDF) $f(x)$, which is non-negative and integrates to one; the
+probability of landing in an interval is the area under the density,
+$P(a\le X\le b)=\int_a^b f(x)\dd x$. Its running integral is the
+\emph{cumulative distribution function} (CDF) $F(x)=P(X\le x)=\int_{-\infty}^x
+f$, which climbs monotonically from $0$ to $1$ and answers ``how probable is a
+value no larger than $x$?'' (Figure~\ref{fig:stats-dist}).
+
+Two numbers summarise a distribution. The \emph{mean} (or expectation) is its
+balance point,
+%
+\begin{equation}
+\mu = \E[X] = \int x\,f(x)\dd x,
+\end{equation}
+%
+and the \emph{variance} is the mean squared distance from that balance point,
+%
+\begin{equation}
+\sigma^2 = \Var(X) = \E\!\bigl[(X-\mu)^2\bigr]
+        = \E[X^2]-\mu^2,
+\label{eq:variance}
+\end{equation}
+%
+whose square root $\sigma$, the \emph{standard deviation}, has the same units as
+$X$ and is the natural ``width'' of the distribution. When a spread is more
+meaningful relative to the mean---as for a strictly positive quantity like a rate
+constant---one reports the dimensionless \emph{coefficient of variation}
+$\mathrm{CV}=\sigma/\mu$.
+
+\paragraph{The normal distribution.}
+The distribution that recurs everywhere is the \emph{normal} (or Gaussian),
+%
+\begin{equation}
+f(x) = \frac{1}{\sigma\sqrt{2\pi}}
+       \exp\!\left(-\frac{(x-\mu)^2}{2\sigma^2}\right),
+\label{eq:normal}
+\end{equation}
+%
+the symmetric bell of Figure~\ref{fig:stats-dist}(a), with about $68\%$ of its
+mass within $\pm\sigma$ of the mean and $95\%$ within $\pm2\sigma$. Its
+ubiquity is not an accident but a theorem: the \emph{central limit theorem}
+states that a sum (or average) of many small, independent contributions is
+approximately normal whatever the shape of the individual pieces. This is why
+measurement noise---the accumulation of countless tiny perturbations---is so
+often modelled as Gaussian, as it is for every virtual instrument in this
+package.
+
+\paragraph{The lognormal distribution.}
+When a quantity must stay positive and varies \emph{multiplicatively}---each
+batch a random \emph{factor} times a nominal value, rather than a random
+\emph{offset}---the right model is the \emph{lognormal}: $X$ is lognormal if
+$\ln X$ is normal. This is precisely the law Chapter~\ref{ch:ferment} uses to
+jitter physical parameters between batches, $\theta = \bar\theta\,
+e^{\sigma_\theta Z}$ with $Z\sim\mathcal N(0,1)$, because a growth rate or a
+buffering capacity can be $20\%$ high or low but never negative, and for small
+$\sigma_\theta$ the parameter $\sigma_\theta$ is itself the coefficient of
+variation.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{foundations_distributions.png}
+\caption[Density, distribution, and a finite sample]{The anatomy of a
+continuous random variable, here a normal with $\mu=4.6$, $\sigma=0.4$.
+\emph{(a)} The density $f(x)$: probability is area, and the shaded bands hold
+$68\%$ ($\pm\sigma$) and $95\%$ ($\pm2\sigma$) of it. \emph{(b)} The CDF
+$F(x)=P(X\le x)$, from which any interval probability is read directly.
+\emph{(c)} A finite sample of $400$ draws: the histogram approximates the true
+density and the sample mean $\bar x$ approximates $\mu$---the closer, the larger
+the sample. Generated by \code{stats\_demo} via the package's RNG.}
+\label{fig:stats-dist}
+\end{figure}
+
+%==============================================================================
+\section{Estimation and the standard error}
+\label{sec:stats-est}
+
+Given a sample, the natural estimators are the \emph{sample mean} and
+\emph{sample variance}
+%
+\begin{equation}
+\bar x = \frac1n\sum_{i=1}^n x_i,
+\qquad
+s^2 = \frac{1}{n-1}\sum_{i=1}^n (x_i-\bar x)^2 .
+\label{eq:sample-stats}
+\end{equation}
+%
+The divisor $n-1$ rather than $n$---\emph{Bessel's correction}---makes $s^2$
+unbiased; intuitively, one degree of freedom is spent estimating $\bar x$, so
+only $n-1$ independent residuals remain. \emph{Degrees of freedom} (the number
+of independent pieces of information left after fitting) is a bookkeeping
+quantity we shall meet again in regression and the $F$-test.
+
+How precise is $\bar x$? Because the sample mean averages $n$ independent draws,
+its variance is $\sigma^2/n$, so its standard deviation---called the
+\emph{standard error} to distinguish it from the spread of the raw data---is
+%
+\begin{equation}
+\mathrm{SE}(\bar x) = \frac{\sigma}{\sqrt n}\;\approx\;\frac{s}{\sqrt n}.
+\label{eq:se}
+\end{equation}
+%
+The $\sqrt n$ is the central, and sobering, economics of experimentation: to
+halve the error of a mean one must \emph{quadruple} the number of runs. From the
+standard error follows the \emph{confidence interval}, the interval that, over
+many hypothetical repetitions of the whole experiment, would contain the true
+$\mu$ a stated fraction (say $95\%$) of the time:
+%
+\begin{equation}
+\bar x \;\pm\; t_{0.975,\,n-1}\,\frac{s}{\sqrt n},
+\label{eq:ci}
+\end{equation}
+%
+with $t$ the critical value of Student's $t$-distribution (which widens the
+interval to pay for using $s$ in place of the unknown $\sigma$, and tends to the
+normal value $1.96$ as $n$ grows). The subtle, often-misread meaning is worth
+stating plainly: the $95\%$ attaches to the \emph{procedure}, not to a single
+interval; the truth is fixed and it is the interval that is random.
+
+%==============================================================================
+\section{Fitting a model by least squares}
+\label{sec:stats-ols}
+
+Most of Chapter~\ref{ch:design} is about relating an output $y$ to inputs
+$x_1,\dots,x_p$ through a \emph{linear model}
+%
+\begin{equation}
+y = \beta_0 + \beta_1 x_1 + \dots + \beta_p x_p + \eps,
+\qquad \eps\sim\mathcal N(0,\sigma^2),
+\label{eq:linmodel}
+\end{equation}
+%
+where the \emph{coefficients} $\beta_j$ are unknown and $\eps$ is random error.
+``Linear'' refers to linearity in the \emph{coefficients}, not the inputs: an
+interaction $x_1x_2$ or a curvature term $x_1^2$ is just another column, which is
+why the same machinery fits a full quadratic response surface. Stacking the $n$
+observations, the model is $\bm y = \bm X\bm\beta + \bm\eps$, where the
+\emph{design matrix} $\bm X$ has one row per run and one column per term.
+
+\emph{Least squares} chooses the coefficients that minimise the sum of squared
+\emph{residuals} $r_i = y_i-\hat y_i$, the vertical gaps between data and fit
+(Figure~\ref{fig:stats-ols}). Setting the gradient of $\sum_i r_i^2$ to zero
+gives the \emph{normal equations}, whose solution and covariance are the
+classical
+%
+\begin{equation}
+\hat{\bm\beta} = (\bm X\transp\bm X)^{-1}\bm X\transp\bm y,
+\qquad
+\Var(\hat{\bm\beta}) = \sigma^2(\bm X\transp\bm X)^{-1}.
+\label{eq:normaleq}
+\end{equation}
+%
+The diagonal of that covariance gives the \emph{standard error} of each
+coefficient, and hence a confidence interval and significance test for every
+effect. Two properties of $\bm X\transp\bm X$ matter enormously in design. If the
+columns are \emph{orthogonal} (uncorrelated), $\bm X\transp\bm X$ is diagonal,
+every coefficient is estimated independently and with minimum variance, and
+dropping a term does not change the others---this is exactly why the factorial
+designs of Section~\ref{sec:factorial} code their factors to $\pm1$. If instead
+the columns are nearly \emph{collinear}, $\bm X\transp\bm X$ is close to singular,
+its inverse explodes, and the coefficients become wildly uncertain---the
+pathology that motivates the latent-variable methods of Section~\ref{sec:mv}.
+
+The quality of the fit is summarised by the \emph{coefficient of determination}
+%
+\begin{equation}
+R^2 = 1 - \frac{\sum_i (y_i-\hat y_i)^2}{\sum_i (y_i-\bar y)^2},
+\label{eq:r2}
+\end{equation}
+%
+the fraction of the response's variance the model explains: $R^2=1$ is a perfect
+fit, $R^2=0$ no better than the mean.
+
+\begin{keybox}{Algorithm: least squares by the normal equations}
+The whole of Eq.~\eqref{eq:normaleq} is four lines of code
+(\code{stats\_demo.ols\_fit}):
+\begin{verbatim}
+    XtX  = X.T @ X                      # the normal matrix
+    beta = np.linalg.solve(XtX, X.T@y)  # solve, don't invert
+    resid   = y - X @ beta
+    sigma2  = resid @ resid / (n - p)   # residual variance
+    cov     = sigma2 * np.linalg.inv(XtX)
+\end{verbatim}
+One solves the system rather than forming $(\bm X\transp\bm X)^{-1}$ explicitly
+(it is both faster and numerically better); the inverse is computed only to
+report the covariance, from which every standard error follows.
+\end{keybox}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\linewidth]{foundations_ols.png}
+\caption[Least squares and its confidence band]{Ordinary least squares fits the
+line that minimises the total squared length of the grey residual stems. The
+shaded band is the $95\%$ confidence interval for the \emph{mean} response,
+computed from the coefficient covariance of Eq.~\eqref{eq:normaleq}; it is
+narrowest at the centre of the data and flares outward, the geometric signature
+of extrapolation risk. Generated by \code{stats\_demo.ols\_fit}.}
+\label{fig:stats-ols}
+\end{figure}
+
+%==============================================================================
+\section{Generalized linear models}
+\label{sec:stats-glm}
+
+Ordinary least squares quietly assumes that the response is a continuous
+quantity that may range over the whole real line, with normal, constant-variance
+scatter. Much experimental data is not like that. The outcome of a screening run
+may be a \emph{yes/no}---did the blend reach the set point? did the pool meet the
+purity specification?---or a \emph{count}---how many impurity peaks appeared?---or
+a \emph{proportion} bounded in $[0,1]$. Fitting a straight line to a $0/1$
+outcome is not merely inelegant; it predicts probabilities below zero and above
+one (Figure~\ref{fig:stats-glm}), and its constant-variance assumption is simply
+false for such data.
+
+The \emph{generalized linear model} (GLM)~\cite{mccullagh} keeps everything that
+is good about the linear model and repairs exactly what fails. It retains the
+\emph{linear predictor} $\eta = \bm x\transp\bm\beta$---the weighted sum of
+inputs---but inserts a \emph{link function} $g$ between that predictor and the
+mean of the response,
+%
+\begin{equation}
+g(\mu) = \eta = \bm x\transp\bm\beta,
+\qquad
+\mu = \E[y\mid\bm x],
+\label{eq:glm}
+\end{equation}
+%
+and lets the response follow whatever distribution suits its nature (Bernoulli
+for yes/no, Poisson for counts, normal for the classical case, which is just the
+GLM with an identity link). For a binary outcome the natural choice is the
+\emph{logit} link, giving \emph{logistic regression}: the log-odds are linear in
+the inputs, and inverting the link returns a probability guaranteed to lie in
+$[0,1]$,
+%
+\begin{equation}
+\log\frac{\mu}{1-\mu} = \bm x\transp\bm\beta
+\quad\Longleftrightarrow\quad
+\mu = \sigma(\bm x\transp\bm\beta)
+    = \frac{1}{1+e^{-\bm x\transp\bm\beta}} .
+\label{eq:logistic}
+\end{equation}
+%
+A coefficient $\beta_j$ now has a clean reading: it is the change in the
+\emph{log-odds} of the event per unit of $x_j$, so $e^{\beta_j}$ is an
+\emph{odds ratio}. The same template, with a $\log$ link and a Poisson response,
+gives \emph{Poisson regression} for count data.
+
+\paragraph{Fitting: maximum likelihood and the return of least squares.}
+There is no closed form like Eq.~\eqref{eq:normaleq}, because the link is
+nonlinear. One instead chooses $\bm\beta$ to maximise the \emph{likelihood}---the
+probability the model assigns to the observed data---and the elegant result is
+that the optimisation reduces to solving a \emph{weighted} least-squares problem
+over and over. This is \emph{iteratively reweighted least squares} (IRLS): at
+each step the current fit defines a weight $w_i=\mu_i(1-\mu_i)$ for each
+observation (largest where the prediction is most uncertain, near
+$\mu=\tfrac12$), and the coefficients are updated by the weighted normal
+equations.
+
+\begin{keybox}{Algorithm: logistic regression by IRLS}
+The whole of GLM fitting is the OLS update of Section~\ref{sec:stats-ols} with
+weights, iterated to convergence (\code{stats\_demo.logistic\_fit}):
+\begin{verbatim}
+    mu   = sigmoid(X @ beta)            # current fitted probabilities
+    w    = mu * (1 - mu)                # IRLS weights
+    XtWX = X.T @ (w[:, None] * X)       # weighted normal matrix
+    beta += np.linalg.solve(XtWX, X.T @ (y - mu))   # Newton step
+\end{verbatim}
+Swap the link and the weight rule and the same loop fits Poisson, probit, and
+the rest of the GLM family. The in-sample fit is judged not by $R^2$ but by the
+\emph{deviance}, the GLM's analogue of the residual sum of squares.
+\end{keybox}
+
+GLMs are the workhorse for \emph{analysing} experimental data whose response is
+not a tidy Gaussian. In Chapter~\ref{ch:ferment} we use a (regularized) logistic
+regression to ask which strains make a blend likely to set
+(Section~\ref{sec:ferm-analysis}). The same idea reaches naturally into
+downstream chromatography---a logistic model of whether a run meets its purity
+specification, or a Poisson model of the number of impurity peaks in a
+chromatogram---which Section~\ref{sec:glm} develops into a \emph{probabilistic
+design space}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{foundations_glm.png}
+\caption[A generalized linear model]{Why a binary outcome needs a GLM. The
+points are $0/1$ responses (did the event occur?) against a predictor. A linear
+fit (red dashed) sails out of the shaded forbidden zones, predicting
+probabilities below $0$ and above $1$; the logistic GLM (blue) passes the linear
+predictor through the logit link, so its fitted probability is always a genuine
+probability. Generated by \code{stats\_demo.logistic\_fit}.}
+\label{fig:stats-glm}
+\end{figure}
+
+%==============================================================================
+\section{Is the effect real? Hypothesis tests and the analysis of variance}
+\label{sec:stats-anova}
+
+Having estimated an effect, we must ask whether it could plausibly be an
+artefact of noise. The classical apparatus is the \emph{hypothesis test}. One
+states a \emph{null hypothesis} $H_0$---``this effect is zero''---computes a
+\emph{test statistic} whose distribution under $H_0$ is known, and reports the
+\emph{$p$-value}: the probability, \emph{if $H_0$ were true}, of seeing a
+statistic at least as extreme as the one observed. A small $p$-value
+(conventionally $p<0.05$) means the data are hard to reconcile with ``no
+effect,'' so we reject $H_0$. The $p$-value is \emph{not} the probability that
+$H_0$ is true---a perennial confusion---but a statement about the data under an
+assumption.
+
+The \emph{analysis of variance} (ANOVA) is the form this takes for the linear
+model, and the engine of Section~\ref{sec:factorial}. Its insight is that the
+total scatter of the response decomposes exactly into a part the model explains
+and an unexplained residual,
+%
+\begin{equation}
+\underbrace{\sum_i(y_i-\bar y)^2}_{\text{SS}_{\text{total}}}
+=
+\underbrace{\sum_i(\hat y_i-\bar y)^2}_{\text{SS}_{\text{model}}}
++
+\underbrace{\sum_i(y_i-\hat y_i)^2}_{\text{SS}_{\text{residual}}} .
+\label{eq:ssdecomp}
+\end{equation}
+%
+Dividing each \emph{sum of squares} by its degrees of freedom gives a \emph{mean
+square}, and the ratio of the two,
+%
+\begin{equation}
+F = \frac{\text{SS}_{\text{model}}/\mathrm{df}_{\text{model}}}
+         {\text{SS}_{\text{residual}}/\mathrm{df}_{\text{residual}}},
+\label{eq:ftest}
+\end{equation}
+%
+is, under the null hypothesis that the model adds nothing, a draw from the
+$F$-distribution. A large $F$ (small $p$) says the explained variation is too
+big to be chance. Applied term by term, this is exactly how the package decides
+which factors and interactions matter (\code{stats\_demo.regression\_anova}, and
+at scale the \code{anova\_lm} of Section~\ref{sec:factorial}); the same
+sum-of-squares partition reappears, in Section~\ref{sec:stats-varcomp}, as the
+way to split variability from uncertainty.
+
+%==============================================================================
+\section{Honest prediction: overfitting and cross-validation}
+\label{sec:stats-cv}
+
+There is a trap in $R^2$: it can always be driven toward one by adding terms,
+because a flexible enough model can memorise the very noise it was fitted to.
+Such a model \emph{overfits}---it describes the sample it has seen and predicts
+new data badly. The cure is to judge a model on data it did \emph{not} see.
+
+\emph{$K$-fold cross-validation} does this with the data in hand. The runs are
+split into $K$ equal folds; each fold is held out in turn, the model is fitted
+on the other $K-1$, and the held-out fold is predicted. The
+cross-validated coefficient,
+%
+\begin{equation}
+R^2_{\mathrm{CV}} = 1 - \frac{\sum_i\bigl(y_i-\hat y_{-k(i)}(\bm x_i)\bigr)^2}
+                              {\sum_i (y_i-\bar y)^2},
+\label{eq:cv}
+\end{equation}
+%
+where $\hat y_{-k(i)}$ is the prediction for run $i$ from a model trained without
+its fold, measures genuine \emph{out-of-sample} skill. Unlike the in-sample
+$R^2$, it \emph{falls} once added complexity begins to fit noise, giving an
+honest stopping rule. This single idea appears under two names in the chapters
+that follow---the $Q^2$ of partial least squares (Section~\ref{sec:mv}) and the
+$R^2_{\mathrm{CV}}$ that grades the tree ensembles of
+Section~\ref{sec:ferm-analysis}---but it is always Eq.~\eqref{eq:cv}.
+
+%==============================================================================
+\section{Regularization: taming complexity and collinearity}
+\label{sec:stats-reg}
+
+Cross-validation \emph{diagnoses} overfitting; \emph{regularization} prevents it.
+The setting is the one that defeats ordinary least squares: more candidate
+effects than runs ($p>n$), or columns so collinear that $\bm X\transp\bm X$ is
+near-singular and the coefficient variances of Eq.~\eqref{eq:normaleq} explode.
+Both are everyday in screening, where one may wish to entertain hundreds of
+strains or interaction terms from a couple of hundred experiments. The remedy is
+to stop minimising the residual sum of squares alone and instead minimise it
+\emph{plus a penalty on the size of the coefficients},
+%
+\begin{equation}
+\hat{\bm\beta} = \arg\min_{\bm\beta}\;
+   \underbrace{\sum_i\bigl(y_i-\bm x_i\transp\bm\beta\bigr)^2}_{\text{fit}}
+   \;+\; \lambda\,\underbrace{P(\bm\beta)}_{\text{penalty}},
+\label{eq:penalised}
+\end{equation}
+%
+where $\lambda\ge0$ sets how hard the penalty bites. The penalty buys a little
+\emph{bias} in exchange for a large cut in \emph{variance}---the
+\emph{bias--variance trade-off}---and the net effect on out-of-sample error is
+usually a clear win. The two classic penalties differ in their geometry:
+
+\begin{itemize}
+  \item \textbf{Ridge} ($L_2$): $P(\bm\beta)=\sum_j\beta_j^2$. This adds
+  $\lambda$ to the diagonal of the normal matrix,
+  $\hat{\bm\beta}=(\bm X\transp\bm X+\lambda\bm I)^{-1}\bm X\transp\bm y$, which
+  is \emph{always} invertible---curing collinearity outright. Ridge
+  \emph{shrinks} every coefficient smoothly toward zero but sets none exactly to
+  zero (Figure~\ref{fig:stats-reg}, left).
+  \item \textbf{Lasso}~\cite{tibshirani} ($L_1$): $P(\bm\beta)=\sum_j|\beta_j|$. The absolute-value
+  penalty has a corner at the origin, and that corner does something ridge
+  cannot: it drives the coefficients of unhelpful inputs \emph{exactly} to zero
+  (Figure~\ref{fig:stats-reg}, right). The lasso therefore performs
+  \emph{variable selection}---its fitted model names a sparse, interpretable
+  subset of the inputs that matter. The \emph{elastic net} mixes the two,
+  inheriting the lasso's sparsity and the ridge's grace under correlated columns.
+\end{itemize}
+
+The penalty strength $\lambda$ is the one knob, and it is chosen by exactly the
+cross-validation of Section~\ref{sec:stats-cv}: sweep $\lambda$, and keep the
+value with the best out-of-sample score.
+
+\begin{keybox}{Algorithm: ridge in one line, the lasso by coordinate descent}
+Ridge is a one-line modification of the normal equations
+(\code{stats\_demo.ridge\_fit}):
+\begin{verbatim}
+    beta = np.linalg.solve(X.T@X + lam*np.eye(p), X.T@y)
+\end{verbatim}
+The lasso has no closed form, but cycling over coefficients and
+\emph{soft-thresholding} each---shrinking it toward zero and clamping to exactly
+zero once the penalty outweighs its pull---converges quickly
+(\code{stats\_demo.lasso\_fit}):
+\begin{verbatim}
+    rho     = X[:, j] @ (y - X@beta + X[:, j]*beta[j])   # partial fit
+    beta[j] = sign(rho) * max(abs(rho) - lam, 0) / ||X[:, j]||^2
+\end{verbatim}
+The $\max(\cdot,0)$ is the corner that creates sparsity.
+\end{keybox}
+
+\paragraph{Regularization beyond the linear model.}
+The idea is far more general than ridge and the lasso. \emph{Every} method in
+this book that fights overfitting is regularizing in disguise. The
+\emph{random forest} of Section~\ref{sec:ferm-analysis} regularizes
+\emph{implicitly}: by averaging many trees, each grown on a bootstrap resample
+and restricted at each split to a random subset of inputs, it trades a little
+bias for a large variance reduction---the same bargain as
+Eq.~\eqref{eq:penalised}, struck by randomisation rather than a penalty term.
+\emph{Gradient boosting} (XGBoost) regularizes \emph{explicitly}: its objective
+carries a penalty on the number of leaves and the size of the leaf weights
+(the $\Omega(f)$ term of Eq.~\eqref{eq:xgb}), which is Eq.~\eqref{eq:penalised}
+transplanted onto trees. Seeing regularization as one idea---pay a little bias to
+buy a lot of variance---unifies the linear and the ensemble methods that
+Chapter~\ref{ch:ferment} sets side by side~\cite{esl}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{foundations_regularization.png}
+\caption[Ridge and lasso regularization paths]{Coefficient paths as the penalty
+$\lambda$ relaxes from strong (left) to weak (right); three inputs truly matter
+(red) and five are noise (grey). \emph{Left:} ridge shrinks every coefficient
+smoothly and in concert, but no coefficient is ever exactly zero. \emph{Right:}
+the lasso holds the noise coefficients at \emph{exactly} zero until the penalty
+is quite weak, selecting the three real effects---variable selection for free.
+Generated by \code{stats\_demo.coefficient\_path}.}
+\label{fig:stats-reg}
+\end{figure}
+
+%==============================================================================
+\section{Error bars without a formula: the bootstrap}
+\label{sec:stats-boot}
+
+The standard error~\eqref{eq:se} has a tidy formula because the mean is simple
+and the sample large. For a complicated statistic, or a small, skewed sample, no
+such formula may exist. The \emph{bootstrap} of Efron supplies one by brute
+force, on a single, almost impudent idea: \emph{the sample is the best estimate
+of the population we have, so resample from it}.
+
+Concretely, to put an error bar on any statistic $T$ one draws many new samples
+of size $n$ \emph{from the observed data, with replacement}, recomputes $T$ on
+each, and reads the spread of those replicates as the sampling distribution of
+$T$. A confidence interval is then just the empirical quantiles of the
+replicates (Figure~\ref{fig:stats-boot}).
+
+\begin{keybox}{Algorithm: the percentile bootstrap}
+For \code{stats\_demo.bootstrap\_ci(sample, statistic, n\_boot, alpha)}:
+\begin{enumerate}
+  \item Repeat \code{n\_boot} times: draw $n$ indices uniformly with replacement
+  from $\{1,\dots,n\}$, form the resample, and store $T$ of it.
+  \item Report the observed $T$ as the estimate, and the empirical
+  $[\alpha/2,\,1-\alpha/2]$ quantiles of the stored replicates as the confidence
+  interval.
+\end{enumerate}
+No distributional assumption, no derivative, no formula for the variance of
+$T$---just resampling and counting. This is a special case of the broader
+\emph{Monte~Carlo} principle: replace an intractable expectation by an average
+over many random draws, the same principle that underlies the uncertainty
+propagation of this package.
+\end{keybox}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{foundations_bootstrap.png}
+\caption[The bootstrap]{The bootstrap turns one sample into a sampling
+distribution. \emph{(a)} A small ($n=18$), skewed sample---exactly the case where
+a textbook normal interval is unreliable. \emph{(b)} Resampling it $20{,}000$
+times with replacement and recomputing the mean yields the sampling distribution
+of $\bar x$; its central $95\%$ (green) is the bootstrap confidence interval.
+Generated by \code{stats\_demo.bootstrap\_ci}.}
+\label{fig:stats-boot}
+\end{figure}
+
+%==============================================================================
+\section{Variability versus uncertainty}
+\label{sec:stats-varcomp}
+
+The most important conceptual distinction in this monograph is between two kinds
+of randomness that a single number like ``$\pm0.3$'' hopelessly conflates.
+\emph{Variability} (the statisticians' \emph{aleatoric} uncertainty) is real,
+physical spread: genuinely identical settings still give different batches,
+because the milk lot, the inoculum, and the incubator are never quite the same.
+It does not shrink with a better instrument---only with better process control.
+\emph{Uncertainty} (\emph{epistemic}) is our imperfect knowledge: measurement
+noise, finite samples, a model that is only approximate. It \emph{does} shrink
+with more or better data, and can be averaged away by replication.
+
+These can be separated when a design measures several batches, each more than
+once. A balanced one-way \emph{variance-components} analysis splits the total
+scatter into a \emph{within-batch} part (repeat measurements of the same
+batch---this is uncertainty) and a \emph{between-batch} part (the spread of the
+batch means above and beyond that noise---this is variability),
+%
+\begin{equation}
+\hat\sigma^2_{\text{within}} = \mathrm{MS}_{\text{within}},
+\qquad
+\hat\sigma^2_{\text{between}}
+   = \frac{\mathrm{MS}_{\text{between}}-\mathrm{MS}_{\text{within}}}{m},
+\label{eq:varcomp}
+\end{equation}
+%
+from the same mean squares as the ANOVA, with $m$ the number of replicates per
+batch (\code{stats\_demo.variance\_components}). Figure~\ref{fig:stats-var} shows
+the picture: tight clusters of replicate measurements (small within-batch noise)
+whose \emph{centres} nevertheless scatter widely (large between-batch
+variability). Reading a real process this way---and refusing to collapse the two
+numbers into one---is the statistical backbone of the ``three faces of
+randomness'' that Chapter~\ref{ch:ferment} builds into its stochastic
+fermentation model.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.8\linewidth]{foundations_variance.png}
+\caption[Variability versus uncertainty]{Eight batches, each measured six times.
+The replicate measurements within a batch cluster tightly---small
+\emph{within-batch} noise, which a better probe would shrink---yet the batch
+means (red bars) scatter far more widely about the grand mean (dashed)---real
+\emph{between-batch} variability, which only better process control can reduce.
+The variance-components estimator of Eq.~\eqref{eq:varcomp} recovers the two
+separately. Generated by \code{stats\_demo.variance\_components}.}
+\label{fig:stats-var}
+\end{figure}
+
+%==============================================================================
+\section{Why design experiments?}
+\label{sec:stats-doe}
+
+Everything so far has taken the data as given and asked what may be inferred from
+it. But the scientist usually gets to choose \emph{which} experiments to run, and
+that choice---made before a single measurement---governs how much the data can
+ever tell. This is the province of the \emph{design of experiments} (DoE), and
+its premise, due to Fisher~\cite{fisher}, is bracing: \emph{no analysis, however
+clever, can rescue a badly designed experiment.} A statistician consulted afterwards, in
+Fisher's famous phrase, can often only conduct a post-mortem. Design is what
+turns experimentation from anecdote-gathering into measurement.
+
+\subsection{The error budget of an experiment}
+
+To see what design must control, decompose the error in any measured response
+into two fundamentally different kinds.
+
+\emph{Systematic error}, or \emph{bias}, pushes every measurement in the same
+direction: a mis-calibrated probe reading half a unit high, a reagent that
+degrades over the day so that later runs differ from earlier ones for a reason
+that has nothing to do with the factors. Bias does not average out with more
+runs---repeating a biased experiment just gives a more precise wrong answer---and
+it is the more dangerous error precisely because it hides.
+
+\emph{Random error} scatters measurements unsystematically about the truth, and
+it is itself the sum of the two components Section~\ref{sec:stats-varcomp} taught
+us to separate: \emph{measurement uncertainty} (the probe noise, the assay
+imprecision---epistemic, shrinkable by replication) and \emph{process
+variability} (genuine batch-to-batch biology---aleatoric, shrinkable only by
+better control). Random error does average out: the standard
+error~\eqref{eq:se} falls as $1/\sqrt n$.
+
+\begin{keybox}{The two errors and the tactics that defeat them}
+\emph{Systematic error (bias)} $\to$ defeated by \emph{comparison} (run controls
+side by side so the bias cancels in the difference) and \emph{randomization}
+(below). \emph{Random error} $\to$ defeated by \emph{replication} (averaging
+shrinks it as $1/\sqrt n$ and, as a bonus, \emph{measures} it). Confusing the two
+is the classic experimental blunder: no number of replicates fixes a bias, and no
+calibration fixes irreducible variability.
+\end{keybox}
+
+\subsection{Fisher's principles}
+
+Three design principles, all Fisher's, target this error budget directly.
+
+\emph{Replication}---running the same condition more than once---does double duty:
+it shrinks the standard error of each estimated effect, and it furnishes a
+model-free estimate of the random error against which effects are judged
+significant (the residual mean square of the ANOVA,
+Section~\ref{sec:stats-anova}). \emph{Randomization}---assigning run conditions to
+time slots in random order---is Fisher's quiet masterstroke: it converts an
+unknown systematic error (a drift, a warming room) into part of the random error,
+so that it inflates the error bars honestly rather than masquerading as a real
+effect. \emph{Blocking}---grouping runs into homogeneous blocks (one milk lot, one
+day) and comparing \emph{within} them---removes a known nuisance source of
+variability from the comparison entirely, sharpening the contrasts of interest.
+
+\subsection{What a good design buys}
+
+Beyond controlling error, the \emph{structure} of a design determines what can be
+estimated and how precisely. A \emph{factorial} design---varying several factors
+together rather than one-at-a-time---is the decisive idea, for a reason the
+one-factor-at-a-time (OFAT) tradition misses entirely: only by varying factors
+\emph{jointly} can one detect an \emph{interaction}, where the effect of one
+factor depends on the level of another. Figure~\ref{fig:stats-doe} shows the
+trap. On a response with an interaction, OFAT---optimise factor one, fix it,
+then optimise factor two---climbs to a point and stops, blind to the diagonal
+ridge along which the true optimum lies; a factorial, sampling the corners,
+sees the tilt at once. Factorial designs are also \emph{efficient} (every run
+informs every main effect, so the information per experiment is maximal) and,
+when the factors are coded as in Section~\ref{sec:stats-ols}, \emph{orthogonal}
+(the effects are estimated independently, each with minimum variance).
+
+These are the threads Chapter~\ref{ch:design} takes up in earnest---factorial and
+response-surface designs, space-filling designs, and the adaptive designs that
+choose each run in light of the last. The statistics of this chapter is what
+makes their value precise: a design is good exactly insofar as it estimates the
+effects we care about with small variance, free of bias, using the fewest runs.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\linewidth]{foundations_doe.png}
+\caption[Why design: OFAT versus a factorial]{A response with a genuine
+interaction (its optimum lies along a diagonal ridge). One-factor-at-a-time
+(red) optimises $x_1$, fixes it, then optimises $x_2$, and halts at a point that
+is far from the true optimum (star)---it cannot perceive that the factors must
+move \emph{together}. A $2^2$ factorial (green) samples the corners and the
+centre, and the interaction is immediately visible in the responses. This is the
+foundational argument for designing experiments rather than tuning factors one
+at a time.}
+\label{fig:stats-doe}
+\end{figure}
+
+%==============================================================================
+\section{A Bayesian coda}
+\label{sec:stats-bayes}
+
+The methods above are \emph{frequentist}: a parameter is a fixed unknown and
+probability describes the long-run behaviour of procedures. There is a second,
+equally respectable view, and Chapter~\ref{ch:design} relies on it. The
+\emph{Bayesian} treats the unknown parameter as itself uncertain and describes
+that uncertainty with a probability distribution. One starts with a \emph{prior}
+$p(\theta)$ encoding what is known before the data, observes data with
+\emph{likelihood} $p(\mathcal D\mid\theta)$, and updates to the \emph{posterior}
+by Bayes' theorem,
+%
+\begin{equation}
+p(\theta\mid\mathcal D)\;\propto\; p(\mathcal D\mid\theta)\,p(\theta).
+\label{eq:bayes}
+\end{equation}
+%
+The posterior is the prior reweighted by how well each parameter value explains
+the data. This is precisely the engine of two later constructions: the Gaussian
+process surrogate of Bayesian optimisation (Section~\ref{sec:bo}), which is a
+prior over \emph{functions} updated by the runs observed so far into a posterior
+mean and a calibrated error bar; and the inverse parameter estimation of the
+package's uncertainty-quantification layer. The two philosophies are
+complementary tools, and a mature practitioner reaches for whichever answers the
+question at hand.
+
+\begin{keybox}{The thread into the next chapters}
+Every statistical term in Chapters~\ref{ch:design} and~\ref{ch:ferment} is one
+of the above. \emph{Least squares and ANOVA} (Sections~\ref{sec:stats-ols},
+\ref{sec:stats-anova}) drive factorial response surfaces; \emph{generalized
+linear models} (Section~\ref{sec:stats-glm}) analyse yes/no and count responses,
+as in the strain screen; \emph{orthogonality and collinearity} explain why
+designs are coded and why PCA/PLS exist; \emph{regularization}
+(Section~\ref{sec:stats-reg}) makes the wide, $p>n$ screening problem tractable
+and is the lens that unifies the linear models with the tree ensembles;
+\emph{cross-validation} (Section~\ref{sec:stats-cv}) is the $Q^2$ and
+$R^2_{\mathrm{CV}}$ that keep models honest; the \emph{Bayesian update}
+(Section~\ref{sec:stats-bayes}) is Bayesian optimisation; the
+\emph{variability/uncertainty} split (Section~\ref{sec:stats-varcomp}) is the
+organising idea of the stochastic fermentation; and the \emph{principles of
+design} (Section~\ref{sec:stats-doe}) are the reason
+Chapter~\ref{ch:design} exists at all. A reader who has these in hand is ready
+for the designs.
+\end{keybox}

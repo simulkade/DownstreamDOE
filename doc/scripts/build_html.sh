@@ -24,6 +24,8 @@ if [[ "${REGEN:-1}" != "0" ]]; then
   fi
   "$PY" "$DOC_DIR/scripts/make_figures.py" || \
     echo "!! figure generation failed; continuing (figures may be stale/missing)"
+  "$PY" "$DOC_DIR/scripts/make_foundations_figures.py" || \
+    echo "!! foundations figure generation failed; continuing"
 fi
 
 # --- 2. Stage assets next to the HTML ----------------------------------------

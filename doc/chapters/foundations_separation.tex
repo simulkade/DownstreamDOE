@@ -1,0 +1,343 @@
+\chapter{Foundations of Downstream Separation}
+\label{ch:sep}
+
+\begin{quote}\itshape
+``Don't waste clean thinking on dirty enzymes.'' --- Efraim Racker, on why
+purity comes first.
+\end{quote}
+
+\noindent
+The models of Chapter~\ref{ch:models} speak fluently of isotherms, plates,
+gradients, and breakthrough; the fermentation of Chapter~\ref{ch:ferment} of
+substrate, biomass, and specific growth rates. To a statistician or a software
+engineer drawn to this monograph by its design methods, that vocabulary can be a
+wall. This chapter dismantles it. We build, from the molecule up, the small set
+of physical ideas a reader needs to follow the rest of the book: what a
+\emph{downstream process} is and why it exists, what makes biological molecules
+hard to separate, how an \emph{adsorption isotherm} governs everything, how a
+\emph{column} turns that isotherm into a separation, and what a
+\emph{fermentation} is as a unit operation. As in Chapter~\ref{ch:stats}, the
+treatment is self-contained but curated to exactly what Chapters~\ref{ch:models}
+through~\ref{ch:ferment} use, and the quantitative figures are generated from a
+small teaching module (\code{downstream\_doe.foundations.separation\_demo}).
+
+%==============================================================================
+\section{The bioprocess and its downstream half}
+\label{sec:sep-train}
+
+A biological drug---a monoclonal antibody, an enzyme, a vaccine antigen---is made
+in two great phases. \emph{Upstream}, living cells (bacterial, yeast, or
+mammalian) are grown in a bioreactor and coaxed into making the target molecule;
+the output is a turbid, dilute broth in which the product is a small fraction of
+a vast chemical zoo. \emph{Downstream} is everything after: the sequence of
+\emph{unit operations}---discrete, repeatable processing steps---that clarifies,
+concentrates, and purifies that broth into a pure drug substance
+(Figure~\ref{fig:sep-train}). This monograph lives almost entirely downstream.
+
+A platform downstream train for an antibody runs: \emph{harvest and
+clarification} (centrifuge and filter away the cells and debris); \emph{capture}
+(a highly selective first chromatography step---classically Protein~A---that binds
+the product and lets most impurities wash through); one or two \emph{polishing}
+steps (further chromatography, usually ion exchange and/or hydrophobic
+interaction, that remove the last, most product-like impurities); and
+\emph{formulation} by ultrafiltration/diafiltration (UF/DF), which concentrates
+the product and exchanges it into its final buffer. Purity climbs at every
+stage.
+
+Three numbers grade a step, and they are the responses optimised throughout the
+book. \emph{Yield} (or recovery) is the fraction of product that survives the
+step. \emph{Purity} is the product's share of what comes out. \emph{Productivity}
+is throughput---product mass per unit resin per unit time. They almost always
+\emph{compete}: collecting a wider, purer cut sacrifices yield; running faster
+sacrifices resolution. Navigating that trade-off is what the experimental
+designs of Chapter~\ref{ch:design} are for.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{foundations_bioprocess.png}
+\caption[The bioprocess train]{A platform bioprocess. \emph{Upstream}
+(fermentation/cell culture) makes the molecule; \emph{downstream}---the subject of
+this book---clarifies, captures, polishes, and formulates it. Each box is a
+\emph{unit operation}, and purity increases from left to right. The
+chromatographic steps (capture and polish) are modelled in
+Chapter~\ref{ch:models}; the fermentation in Chapter~\ref{ch:ferment}.}
+\label{fig:sep-train}
+\end{figure}
+
+%==============================================================================
+\section{The molecules, and why they are hard to separate}
+\label{sec:sep-molecules}
+
+A protein is a long chain of \emph{amino acids} folded into a compact shape. Two
+of its surface properties do almost all the work of separation. The first is
+\emph{charge}: several amino-acid side chains gain or lose protons as the
+solution pH changes, so a protein's \emph{net charge} swings from positive at
+low pH to negative at high pH, passing through zero at a characteristic pH called
+the \emph{isoelectric point} (pI). The second is \emph{hydrophobicity}: patches
+of oily, water-avoiding residues on the surface. A given protein is thus a unique
+point in a space of size, charge-versus-pH, and hydrophobicity---and each axis is
+the basis of a different separation \emph{mode} (Section~\ref{sec:sep-modes}).
+
+The difficulty is that the impurities resemble the product. The broth carries
+\emph{host-cell proteins} (hundreds of the cell's own proteins), \emph{DNA},
+\emph{endotoxin}, leached ligand from a previous column, and---most insidiously
+---\emph{product-related} variants: aggregates (clumps of the product), fragments,
+and charge variants that differ from the molecule we want by the smallest of
+margins. Separating a protein from buffer is trivial; separating it from a
+slightly larger clump of itself is the entire art, and it is why the field needs
+several orthogonal modes and the careful optimisation this book describes.
+
+\begin{appbox}{why orthogonality matters}
+Because impurities span charge, size, and hydrophobicity, no single step removes
+them all. The platform pairs \emph{orthogonal} modes---ion exchange (charge) then
+hydrophobic interaction (hydrophobicity)---so that an impurity which co-elutes
+with the product on one basis is resolved on the other. Choosing and sequencing
+these modes is a downstream-development decision the virtual laboratory lets one
+rehearse \emph{in silico}.
+\end{appbox}
+
+%==============================================================================
+\section{Equilibrium and the adsorption isotherm}
+\label{sec:sep-isotherm}
+
+Almost every purification step rests on \emph{partitioning}: when a solute is
+offered a choice between the flowing liquid (the \emph{mobile phase}) and a solid
+(the \emph{stationary phase}, or \emph{adsorbent}/\emph{resin}---typically porous
+beads packed in a tube), it distributes between the two according to how strongly
+it is attracted to the solid. At equilibrium the relationship between the amount
+on the solid, $q$, and the amount in the liquid, $c$, is the \emph{adsorption
+isotherm}---the single most important constitutive law in the book.
+
+At low concentration the isotherm is \emph{linear},
+%
+\begin{equation}
+q = H\,c,
+\label{eq:sep-henry}
+\end{equation}
+%
+where the slope $H$, the \emph{Henry constant}, is the partition coefficient: a
+large $H$ means the solute strongly prefers the solid and so moves slowly through
+a column. But the solid has only finitely many binding sites, so as $c$ rises the
+loading must saturate. The simplest law capturing both regimes is the
+\emph{Langmuir isotherm} (Figure~\ref{fig:sep-isotherm}),
+%
+\begin{equation}
+q = \frac{q_{\max}\,b\,c}{1 + b\,c},
+\label{eq:sep-langmuir}
+\end{equation}
+%
+with $q_{\max}$ the \emph{saturation capacity} (the monolayer ceiling) and $b$ an
+affinity constant. Its two limits are exactly the two regimes of preparative
+chromatography. When $bc\ll1$ the denominator is one and $q\approx(q_{\max}b)\,c$:
+the linear law~\eqref{eq:sep-henry} with $H=q_{\max}b$, valid for a dilute,
+analytical injection. When $bc\gg1$, $q\to q_{\max}$: the column is
+\emph{overloaded}, as a preparative step deliberately is to maximise
+productivity. The bend between them is what lets a strongly bound species
+displace a weaker one---the nonlinear effect that makes high-resolution
+preparative separation possible, and the reason Chapter~\ref{ch:models} builds
+its whole engine on a multi-component Langmuir core.
+
+\begin{keybox}{Algorithm: the isotherm, and where $H$ hides in it}
+\code{separation\_demo.langmuir(c, q\_max, b)} is a one-liner,
+\begin{verbatim}
+    q = q_max * b * c / (1.0 + b * c)
+\end{verbatim}
+and the Henry constant is recovered as its initial slope, $H=q_{\max}b$
+(\code{separation\_demo.henry}). Every chromatography mode in
+Chapter~\ref{ch:models} is this \emph{same} expression; the modes differ only in
+how the affinity $b$ responds to a mobile-phase ``modulator'' such as salt
+(Section~\ref{sec:sep-modes}).
+\end{keybox}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{foundations_isotherm.png}
+\caption[The adsorption isotherm]{The Langmuir isotherm (blue) and its dilute,
+linear limit (red dashed). At low concentration the loading follows the Henry
+line of slope $H=q_{\max}b$; as concentration rises it bends over toward the
+finite saturation capacity $q_{\max}$. Where a band sits is set by $H$; how a
+loaded column behaves is set by the bend. Generated by
+\code{separation\_demo.langmuir}.}
+\label{fig:sep-isotherm}
+\end{figure}
+
+%==============================================================================
+\section{The column: retention, plates, and resolution}
+\label{sec:sep-column}
+
+A chromatography \emph{column} is a tube packed with adsorbent beads through
+which mobile phase flows. The natural unit of throughput is the \emph{column
+volume} (CV), the liquid volume of the packed bed; the fraction of that volume
+occupied by flowing liquid (between and within the beads) is the \emph{porosity}.
+Because a retained solute spends part of its time stuck to the solid, it travels
+more slowly than the liquid: it emerges after a \emph{retention volume} larger
+than one CV, by a factor set directly by the isotherm slope $H$. The
+\emph{retention factor} $k$ measures this extra holdup, and a more strongly bound
+solute (larger $H$, larger $k$) elutes later. This is the lever every separation
+pulls: arrange conditions so that two solutes have \emph{different} retention,
+and they come off the column at different times.
+
+\paragraph{Breakthrough and capacity.}
+If feed is pumped continuously onto a column, the adsorbent fills from the inlet
+and eventually the solute ``breaks through'' at the outlet---the
+\emph{breakthrough curve} (Figure~\ref{fig:sep-column}, left). The simplest
+faithful model imagines the column as a chain of $N$ well-mixed equilibrium
+stages, the \emph{theoretical plates}; the outlet concentration then rises along
+a sigmoid whose sharpness grows with $N$. This is the operative picture of a
+\emph{capture} step run in \emph{bind-and-elute} mode (load until just before
+breakthrough, then elute the captured product in a small, concentrated volume),
+and---inverted---of \emph{flow-through} polishing, where the product passes
+straight through while impurities bind.
+
+\paragraph{Plates, peaks, and resolution.}
+The same plate count governs how \emph{sharp} an eluting band is. A column of $N$
+plates produces an approximately Gaussian peak whose width relative to its
+retention time shrinks as $\sqrt N$: formally $N=t_R^2/\sigma^2$, so more plates
+mean a taller, narrower peak---higher \emph{efficiency}. The practical question
+is whether two neighbouring peaks are actually \emph{separated}, quantified by
+the \emph{resolution}
+%
+\begin{equation}
+R_s = \frac{2\,|t_{R,2}-t_{R,1}|}{w_1+w_2},
+\qquad w = 4\sigma,
+\label{eq:sep-rs}
+\end{equation}
+%
+the distance between peak centres in units of their average width
+(Figure~\ref{fig:sep-column}, right). The universal target is $R_s\gtrsim1.5$,
+``baseline'' separation, at which two equal peaks barely overlap. Resolution thus
+has two ingredients: \emph{selectivity} (getting the retention times apart,
+through the isotherm and the gradient) and \emph{efficiency} (keeping the peaks
+narrow, through the plate count). Chapter~\ref{ch:models} computes exactly these
+quantities from its simulated chromatograms.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{foundations_column.png}
+\caption[Plates, breakthrough, and resolution]{\emph{Left:} breakthrough curves
+from the tanks-in-series model---more theoretical plates $N$ give a sharper front,
+so plate count is column efficiency made quantitative. \emph{Right:} two Gaussian
+bands of the same efficiency; their separation is summarised by the resolution
+$R_s$ of Eq.~\eqref{eq:sep-rs}, with $R_s\gtrsim1.5$ the usual target. Generated
+by \code{separation\_demo.tanks\_in\_series\_breakthrough}, \code{gaussian\_peak},
+and \code{resolution}.}
+\label{fig:sep-column}
+\end{figure}
+
+%==============================================================================
+\section{Why peaks broaden: convection, dispersion, and mass transfer}
+\label{sec:sep-masstransfer}
+
+In an ideal column every molecule of a solute would travel at the same speed and
+emerge as an infinitely sharp spike. Real bands spread, and understanding why is
+the bridge to the transport models of Chapter~\ref{ch:models}. Three mechanisms
+broaden a band. \emph{Convection} simply carries the solute downstream at the
+mobile-phase velocity---it moves the band but does not broaden it. \emph{Axial
+dispersion} does broaden it: molecules take tortuous, unequal paths through the
+packing and spread out, much as a diffusing ink drop blurs. And \emph{mass
+transfer resistance}---the finite time a molecule needs to diffuse out of the
+flowing stream, across the stagnant film around a bead, and into the bead's
+pores to reach a binding site---means the solid is never quite in equilibrium with
+the passing liquid, which smears the band further.
+
+A model can either \emph{lump} all of this into a single effective dispersion and
+a single mass-transfer rate constant---fast, and adequate for band positions and
+widths---or \emph{resolve} the film and pore-diffusion steps explicitly, which is
+slower but mechanistically faithful. That is exactly the choice
+Chapter~\ref{ch:models} makes between its lumped ``transport-dispersive'' engine
+and its ``general rate model.'' The vocabulary of this section---convection,
+dispersion, film, pore diffusion---is all one needs to read that distinction.
+
+%==============================================================================
+\section{The modes in one idea: a modulator controls binding}
+\label{sec:sep-modes}
+
+The different chromatography \emph{modes} exploit the different surface
+properties of Section~\ref{sec:sep-molecules}, but they share a single
+organising idea: a knob in the mobile phase---the \emph{modulator}---sets how
+strongly the solute binds, and a \emph{gradient} in that knob elutes the bound
+solutes in order. The three modes the book treats differ only in what the
+modulator is and which way binding responds:
+
+\begin{itemize}
+  \item \emph{Ion-exchange} (IEX) separates on \emph{charge}. The modulator is
+  \emph{salt}: at low salt the charged protein binds the oppositely charged
+  resin; raising the salt screens the attraction and elutes it. A second knob,
+  \emph{pH}, tunes the protein's net charge relative to its pI.
+  \item \emph{Hydrophobic-interaction} (HIC) separates on \emph{hydrophobicity}.
+  The modulator is again salt, but with the \emph{opposite} sense: high salt
+  drives the protein onto the hydrophobic resin (``salting out''), and
+  \emph{lowering} the salt elutes it.
+  \item \emph{Reversed-phase} (RP) also separates on hydrophobicity, with the
+  modulator the fraction of \emph{organic solvent}; raising it elutes.
+\end{itemize}
+%
+Two everyday measures of the salt knob recur: \emph{ionic strength}, the total
+concentration of dissolved ions, and \emph{conductivity}, its easily measured
+electrical proxy. A \emph{buffer} holds the pH steady while the salt or organic
+gradient does the eluting. The remarkable economy that Chapter~\ref{ch:models}
+exploits is that all three modes are the \emph{same} Langmuir
+isotherm~\eqref{eq:sep-langmuir}; only the law by which the affinity $b$ depends
+on the modulator changes from one mode to the next. Understanding that single
+sentence is most of what the modelling chapter assumes.
+
+%==============================================================================
+\section{The living unit operation: fermentation basics}
+\label{sec:sep-fermentation}
+
+The last unit operation in this book is upstream and alive: a
+\emph{fermentation}, in which microbes convert a feedstock into a product---the
+subject of Chapter~\ref{ch:ferment}, where the product is cultured milk. A few
+ideas make that chapter's models legible. The microbes consume a
+\emph{substrate} (a nutrient such as the milk sugar lactose) and grow as
+\emph{biomass}; the rate at which biomass increases per unit biomass already
+present is the \emph{specific growth rate} $\mu$. In a sealed \emph{batch}, $\mu$
+is not constant: growth passes through a \emph{lag} phase (cells adjusting to the
+new environment), an \emph{exponential} phase (unrestricted growth), a
+\emph{deceleration} as the substrate runs low, and a \emph{stationary} plateau
+when it is exhausted (Figure~\ref{fig:sep-growth}).
+
+The workhorse description of the substrate's effect is \emph{Monod's law},
+%
+\begin{equation}
+\mu = \mu_{\max}\,\frac{S}{K_S+S},
+\label{eq:sep-monod}
+\end{equation}
+%
+a saturating dependence: growth is near its maximum $\mu_{\max}$ while substrate
+$S$ is plentiful and throttles toward zero as $S$ falls below the
+half-saturation constant $K_S$. Biomass and substrate are tied together by a
+\emph{yield} coefficient $Y_{X/S}$, the biomass formed per unit substrate
+consumed. The few extra ingredients Chapter~\ref{ch:ferment} adds---a mechanistic
+lag, a temperature optimum, inhibition by the acid the microbes excrete, and
+cooperation between strains---are all refinements of this skeleton. Two final
+terms: the small dose of culture used to start a batch is the \emph{inoculum},
+and a defined mixture of microbial \emph{strains} used to inoculate is a
+\emph{starter culture}---and choosing that mixture from a large library is the
+combinatorial design problem that closes the book.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{foundations_growth.png}
+\caption[Batch microbial growth]{A simulated batch fermentation. Biomass (green)
+moves through lag, exponential, deceleration, and stationary phases as the
+substrate (amber, dashed) is consumed; the coupling is Monod's saturating
+kinetics, Eq.~\eqref{eq:sep-monod}, with a yield linking the two. This skeleton
+is what the richer model of Chapter~\ref{ch:ferment} elaborates. Generated by
+\code{separation\_demo.monod\_batch}.}
+\label{fig:sep-growth}
+\end{figure}
+
+\begin{keybox}{The thread into the next chapters}
+With this chapter in hand, the rest of the book reads as a sequence of natural
+elaborations. The \emph{isotherm} (Section~\ref{sec:sep-isotherm}) is the
+constitutive heart of every model in Chapter~\ref{ch:models}; \emph{retention,
+plates, and resolution} (Section~\ref{sec:sep-column}) are the quantities those
+models compute; \emph{dispersion and mass transfer}
+(Section~\ref{sec:sep-masstransfer}) distinguish its two solvers; the
+\emph{modulator} idea (Section~\ref{sec:sep-modes}) unifies its three modes; and
+\emph{Monod growth} (Section~\ref{sec:sep-fermentation}) is the seed of the
+living reactor of Chapter~\ref{ch:ferment}. The physics supplies the questions;
+the statistics of Chapter~\ref{ch:stats} and the designs of
+Chapter~\ref{ch:design} supply the means to answer them efficiently.
+\end{keybox}

@@ -13,14 +13,16 @@ science of \emph{how} to query it---which combinations of process conditions to
 evaluate, in what order, and how to turn the results into knowledge---is
 \emph{Design of Experiments}. In a development setting the same model is the
 oracle of Chapter~\ref{ch:models} or a real wet-lab run; the design methods are
-identical. This chapter presents the four families the package implements, in the
+identical. This chapter presents the families the package implements, in the
 order one typically reaches for them: \emph{full factorial designs} with
 response-surface analysis (Section~\ref{sec:factorial}) for screening and
-robustness; \emph{Latin hypercube sampling} (Section~\ref{sec:lhs}) for
-space-filling exploration; \emph{latent-variable analysis}---PCA and
-PLS---(Section~\ref{sec:mv}) for understanding a high-dimensional design table;
-and \emph{Bayesian optimisation} (Section~\ref{sec:bo}) for adaptively hunting an
-optimum. Section~\ref{sec:design-compare} compares them.
+robustness; \emph{generalized linear models} (Section~\ref{sec:glm}) for the
+pass/fail and count responses that yield a \emph{probabilistic design space};
+\emph{Latin hypercube sampling} (Section~\ref{sec:lhs}) for space-filling
+exploration; \emph{latent-variable analysis}---PCA and PLS---(Section~\ref{sec:mv})
+for understanding a high-dimensional design table; and \emph{Bayesian
+optimisation} (Section~\ref{sec:bo}) for adaptively hunting an optimum.
+Section~\ref{sec:design-compare} compares them.
 
 A common vocabulary, borrowed from \emph{Quality by Design} (QbD), runs through
 all four. The inputs we vary are the \emph{critical process parameters} (CPPs):
@@ -163,6 +165,212 @@ from the response-surface contours.
   central-composite design.
   \item \textbf{Static.} The whole design is committed up front; it does not
   learn from early results.
+\end{itemize}
+\end{consbox}
+
+%==============================================================================
+\section{Generalized linear models and the probabilistic design space}
+\label{sec:glm}
+
+The response surface of Section~\ref{sec:factorial} models a \emph{continuous}
+response---yield, log-purity, productivity---with Gaussian scatter. But the
+question a regulatory filing ultimately asks is not ``what is the mean purity?''
+but ``\emph{what is the probability that this run meets specification?}'' That
+response is a \emph{yes/no}, and a second one---the number of impurity peaks that
+contaminate the product pool---is a \emph{count}. Neither is continuous-and-normal,
+and forcing a least-squares surface onto them is the error
+Section~\ref{sec:stats-glm} warned against: a linear model of a $0/1$ outcome
+predicts probabilities outside $[0,1]$, and one of a count predicts negative
+counts. The right instrument is the \emph{generalized linear model} (GLM).
+
+\subsection{From a response surface to a probability surface}
+
+Recall the GLM of Section~\ref{sec:stats-glm}: the same linear predictor in the
+process factors, $\eta(\bm x)=\beta_0+\sum_i\beta_i x_i+\sum_{i<j}\beta_{ij}x_ix_j$
+(main effects, interactions, and---with a three-level design---curvature, exactly
+as in the response surface), passed through a \emph{link} appropriate to the
+response. For a pass/fail outcome the logit link gives a \emph{logistic
+response surface},
+%
+\begin{equation}
+P(\text{meet spec}\mid\bm x) = \sigma\!\bigl(\eta(\bm x)\bigr)
+   = \frac{1}{1+e^{-\eta(\bm x)}},
+\label{eq:glm-logit}
+\end{equation}
+%
+a smooth surface that lives, by construction, in $[0,1]$. For the count of
+co-eluting impurities the log link gives a \emph{Poisson response surface},
+$\E[\text{count}\mid\bm x]=e^{\eta(\bm x)}$, automatically non-negative. Both are
+fitted by maximum likelihood (the iteratively reweighted least squares of
+Section~\ref{sec:stats-glm}) through the package's \code{fit\_glm\_response}
+(\code{doe/analysis.py}), which builds the Wilkinson--Rogers formula exactly as
+the OLS \code{fit\_response\_model} does and hands it to a \code{statsmodels} GLM
+with the chosen family. Goodness of fit is read not from $R^2$ but from the
+\emph{deviance} and McFadden's pseudo-$R^2$, $1-\ell/\ell_0$, the log-likelihood
+relative to an intercept-only model.
+
+Equation~\eqref{eq:glm-logit} is the modern, probabilistic reading of the
+\emph{design space} of Quality by Design~\cite{ich}. Where the proven acceptable
+ranges of Section~\ref{sec:factorial} carve out, deterministically, where the
+\emph{mean} response sits in spec, the logistic surface delivers the
+\emph{assurance} region
+%
+\begin{equation}
+\mathrm{DS}_{1-\alpha}
+  = \bigl\{\,\bm x : P(\text{meet all CQAs}\mid\bm x)\ \ge\ 1-\alpha\,\bigr\},
+\label{eq:design-space}
+\end{equation}
+%
+the set of process conditions at which the run passes with high probability (say
+$1-\alpha=0.9$). This is precisely the deliverable a process-characterisation
+study is meant to produce, and it falls straight out of a GLM fitted to pass/fail
+data.
+
+\subsection{A polishing-step application: purity}
+\label{sec:glm-polish}
+
+Consider a cation-exchange polish that must separate a monoclonal antibody from
+three closely related \emph{charge variants}---the textbook hard case, since the
+variants differ from the product by a whisker of surface charge. We expose two
+critical process parameters: the \emph{load pH} (which, because the variants
+carry slightly different pH-sensitivities, is the \emph{selectivity} lever) and
+the \emph{gradient length} in column volumes (the \emph{throughput/yield} lever).
+A Latin-hypercube design (Section~\ref{sec:lhs}) places $64$ runs across this
+two-factor space; each run is a full \code{run\_column} simulation of the
+four-component separation. From each chromatogram we pool a fixed window about
+the target apex and record two responses: whether the pool clears the
+specification ($\text{purity}\ge0.95$ \emph{and} $\text{yield}\ge0.80$), and how
+many variants co-elute under the target peak.
+
+Figure~\ref{fig:chrom-glm} shows the two GLMs. The logistic surface (left) maps a
+crisp probabilistic design space: a band at \emph{low} pH---where the variants are
+pushed apart and the pool is pure---bounded below by a yield cliff at the steepest
+gradients, so that the $P\ge0.9$ contour (dashed) encloses a modest corner of the
+operating window. The fit is excellent (pseudo-$R^2\approx0.86$), and the
+interaction between pH and gradient is real: gradient length matters for the
+verdict only at the low-pH edge, where yield is in play. The Poisson surface
+(right) tells the mechanistic story behind the failures: the expected number of
+co-eluting variants climbs steeply as pH rises and selectivity collapses
+(pseudo-$R^2\approx0.59$). Together they convert a few dozen simulated runs into
+an interpretable, probabilistic map of where the step can be operated---and why it
+fails where it does.
+
+\begin{keybox}{Algorithm: a probabilistic design space from pass/fail data}
+\begin{enumerate}
+  \item \textbf{Design \& simulate.} Lay an LHS (or factorial) over the CPPs;
+  run the chromatography oracle at each point and reduce each chromatogram to its
+  pool metrics.
+  \item \textbf{Score.} Encode the binary verdict $y_k=\mathbf 1[\text{purity}_k
+  \ge p^\star \wedge \text{yield}_k\ge y^\star]$ and, optionally, the impurity
+  count.
+  \item \textbf{Fit.} \code{fit\_glm\_response(df, "passed", factors,
+  family="binomial")} (and \code{family="poisson"} for the count); maximum
+  likelihood via IRLS returns the coefficients and the deviance.
+  \item \textbf{Map.} \code{predict\_glm\_grid} evaluates
+  Eq.~\eqref{eq:glm-logit} over a grid; thresholding at $1-\alpha$ gives the
+  design space~\eqref{eq:design-space}.
+\end{enumerate}
+\end{keybox}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{chrom_glm.png}
+\caption[GLM analysis of a chromatography design space]{Generalized linear models
+turn $64$ simulated cation-exchange runs into a probabilistic design space.
+\emph{Left:} a \emph{logistic} response surface for $P(\text{meet spec})$ over load
+pH and gradient length; markers are the design runs (pass $\circ$, fail
+$\times$), and the dashed line is the $P=0.9$ boundary of the design
+space~\eqref{eq:design-space}. \emph{Right:} a \emph{Poisson} response surface for
+the expected number of charge variants co-eluting under the target peak, which
+rises sharply as rising pH erodes selectivity. Computed by \code{run\_column} and
+fitted by \code{fit\_glm\_response}.}
+\label{fig:chrom-glm}
+\end{figure}
+
+\subsection{A capture-step application: breakthrough and recovery}
+\label{sec:glm-capture}
+
+The polish step above is judged on \emph{purity}. The first chromatography step
+of a process---the \emph{capture}---is judged on \emph{recovery}, and its
+characteristic failure is different: \emph{breakthrough}. Run in bind-and-elute
+mode, a capture column is loaded with feed until just before the product begins
+to escape unbound at the outlet; load too much, and the column saturates and the
+product is lost to the flow-through (Section~\ref{sec:sep-column}). The amount
+that can be loaded before this happens---the \emph{dynamic binding
+capacity}---is the quantity a capture step is designed around, and it depends on
+how much is loaded and on how strongly the molecule binds.
+
+We expose two critical process parameters of a cation-exchange capture: the
+\emph{load density} (grams of product offered per litre of resin) and the
+\emph{load conductivity}, set by the salt concentration. Conductivity is the
+telling one: because ion-exchange binding weakens as salt rises
+(Section~\ref{sec:iex}), a high-conductivity load erodes the binding strength and
+the product breaks through early---which is exactly why capture loads are kept
+low in salt. Figure~\ref{fig:capture-glm}(a) shows the three regimes as
+\emph{breakthrough curves}---the outlet concentration, relative to feed, against
+the volume loaded: a clean capture that never breaks through, an overload whose
+front emerges once the bed saturates, and a weak-binding case that bleeds product
+from early on.
+
+For each run we record the \emph{recovery}---one minus the fraction lost to the
+flow-through---and ask whether it clears a specification of $90\%$. Here a subtle
+but important point arises, and it is the reason the design space is
+\emph{probabilistic} at all. The simulated recovery is, in itself, a smooth
+deterministic function of the two parameters; a single noiseless run at each
+condition would partition the space into pass and fail by a sharp curve, and a
+logistic fit to it would be degenerate (perfectly separable). Real runs are not
+noiseless: replicate loads of nominally identical conditions scatter, through
+assay error and the batch-to-batch variability of
+Section~\ref{sec:stats-varcomp}. Drawing a handful of noisy replicate
+measurements at each design point---the package's measurement-noise model
+(\code{add\_measurement\_noise})---turns the verdict near the boundary into a
+genuine probability, and the logistic GLM recovers it cleanly
+(Figure~\ref{fig:capture-glm}(b), pseudo-$R^2\approx0.88$). The $P\ge0.9$ contour
+is the \emph{assurance} boundary~\eqref{eq:design-space}: the curved frontier in
+load-density/conductivity space inside which the capture step meets its recovery
+target with high confidence. This is the probabilistic design space in its most
+operationally honest form---its very gradient is a statement about run-to-run
+variability, not just about the mean.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{capture_glm.png}
+\caption[A capture-step breakthrough design space]{A cation-exchange capture step
+analysed by logistic regression. \emph{Left:} representative \emph{breakthrough
+curves}---outlet over feed concentration versus volume loaded---for a clean
+capture, an overload, and a weak-binding (high-salt) load; the dotted line marks
+$10\%$ breakthrough. \emph{Right:} the logistic \emph{recovery design space} over
+load density and load conductivity, fitted to replicate noisy assays of $48$
+simulated runs; filled contours are $P(\text{recovery}\ge90\%)$, markers are the
+design points shaded by their observed pass fraction, and the dashed line is the
+$P=0.9$ assurance boundary. Computed by \code{run\_column} and
+\code{fit\_glm\_response}.}
+\label{fig:capture-glm}
+\end{figure}
+
+\begin{prosbox}{generalized linear models}
+\begin{itemize}
+  \item \textbf{Right tool for the response.} Models pass/fail and count data on
+  their own terms---bounded probabilities, non-negative counts---where a
+  least-squares surface is simply invalid.
+  \item \textbf{The probabilistic design space, directly.} A logistic surface is
+  the assurance map~\eqref{eq:design-space} that QbD asks for, and it inherits the
+  interaction and curvature structure of the response-surface model.
+  \item \textbf{Interpretable and cheap.} Signed coefficients (log-odds, log-rate)
+  with standard errors and a deviance test; fitted in milliseconds on top of the
+  simulations.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{generalized linear models}
+\begin{itemize}
+  \item \textbf{Needs events of both kinds.} A logistic fit is uninformative if
+  every run passes (or every run fails); the design must straddle the boundary.
+  \item \textbf{Still a low-order surface.} Like the OLS response surface it is a
+  smooth local model; sharp, non-monotone boundaries need interactions, curvature,
+  or more data.
+  \item \textbf{Threshold-dependent.} The design space moves with the spec and the
+  assurance level $1-\alpha$; it is a reading of the model, not an absolute.
 \end{itemize}
 \end{consbox}
 
@@ -500,12 +708,14 @@ advantage that matters most when each experiment is costly.}
 \section{Choosing among the methods}
 \label{sec:design-compare}
 
-The four families are complements, not rivals, and a mature characterisation
+These families are complements, not rivals, and a mature characterisation
 campaign uses them in sequence (Table~\ref{tab:compare}). One \emph{screens} many
 candidate factors with a (fractional) factorial to find the vital few; one
 \emph{explores} the reduced space with an LHS and \emph{understands} it with
 PCA/PLS; one \emph{optimises} within it with BO; and one \emph{characterises} the
-final design space with a response-surface design for the filing. The same
+final design space with a response-surface design---and, where the deliverable is
+the probability of meeting specification, a logistic GLM
+(Section~\ref{sec:glm})---for the filing. The same
 mechanistic oracle of Chapter~\ref{ch:models} drives them all, which is precisely
 the point of a virtual laboratory: it lets one rehearse this entire strategy,
 and quantify its uncertainty, before committing a single millilitre of resin.
@@ -523,6 +733,8 @@ and quantify its uncertainty, before committing a single millilitre of resin.
 \midrule
 Full factorial / RSM & Estimate effects, interactions, design space &
 No (one-shot) & Few factors; need interpretable, defensible effects \\
+GLM (logistic / Poisson) & Probability of meeting spec; counts &
+Analysis step & Pass/fail or count responses; probabilistic design space \\
 Latin hypercube & Space-filling exploration; surrogate training data &
 No (one-shot) & Building a global model; moderate-to-many factors \\
 PCA / PLS & Understand structure; rank factors; relate $X\!\to\!Y$ &

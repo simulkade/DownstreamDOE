@@ -294,6 +294,71 @@ def fig_ferm_importance():
     save(fig, "ferm_importance.png")
 
 
+# ── 7. Regularized linear + logistic (GLM) recover the same strains ───────────
+@figure
+def fig_ferm_regularized():
+    from downstream_doe.config import make_rng
+    from downstream_doe.doe.covering import covering_array
+    from downstream_doe.doe.importance import (
+        logistic_screening,
+        regularized_importance,
+    )
+    from downstream_doe.models import fermentation as ferm
+
+    # Identical screen to fig_ferm_importance (same seeds), so the chapters agree.
+    rng = make_rng(2026)
+    lib = ferm.random_strain_library(50, rng)
+    design = covering_array(50, 200, min_size=2, max_size=5, seed=11)
+    var = ferm.BatchVariability()
+
+    final_ph, did_set = [], []
+    for members in design.runs:
+        setup = ferm.FermentationSetup(consortium=lib.consortium(members), temperature=43.0)
+        batch = ferm.sample_batch(setup, var, rng)
+        res = ferm.run_fermentation(batch, T_GRID, rng=rng)
+        obs = ferm.observe_ph(res, T_GRID, rng=rng)
+        final_ph.append(float(obs["ph"][-1]))
+        did_set.append(1 if np.isfinite(ferm.time_to_ph(T_GRID, res.ph, ferm.PH_SET)) else 0)
+    final_ph = np.array(final_ph)
+    did_set = np.array(did_set)
+    X = design.matrix()
+    names = lib.names
+
+    solo = np.array([
+        ferm.run_fermentation(
+            ferm.FermentationSetup(consortium=lib.consortium([i]), temperature=43.0), T_GRID
+        ).ph[-1]
+        for i in range(50)
+    ])
+
+    net = regularized_importance(X, final_ph, feature_names=names, seed=1, n_repeats=6)
+    log = logistic_screening(X, did_set, feature_names=names, seed=1)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    # (a) elastic-net recovered acidifying effect vs the true (unseen) solo power.
+    coef = net.model[-1].coef_                      # signed: negative -> lowers pH
+    recovered = -coef                               # acidifying strength
+    true_power = -solo
+    r = np.corrcoef(recovered, true_power)[0, 1]
+    ax1.scatter(true_power, recovered, s=28, color=C["coop"], edgecolor="k", lw=0.3)
+    ax1.axhline(0, color=C["indep"], lw=0.8, ls=":")
+    ax1.set(xlabel="true acidifying power  (− solo final pH)",
+            ylabel="elastic-net effect  (− coefficient)",
+            title=f"Regularized linear fit (CV $R^2$={net.cv_score:.2f},  r = {r:.2f})")
+
+    # (b) logistic GLM: which strains most raise P(set)?
+    top = log.coefficients.head(10)[::-1]
+    cols = [C["coop"] if v > 0 else C["lb"] for v in top.values]
+    ax2.barh(np.arange(len(top)), top.values, color=cols, alpha=0.85)
+    ax2.axvline(0, color="k", lw=0.8)
+    ax2.set_yticks(np.arange(len(top)))
+    ax2.set_yticklabels(top.index, fontsize=8)
+    ax2.set(xlabel="logistic coefficient  (+ raises $P(\\mathrm{set})$)",
+            title=f"GLM for “did it set?” (CV AUC={log.cv_auc:.2f}, acc={log.cv_accuracy:.2f})")
+    save(fig, "ferm_regularized.png")
+
+
 def main() -> int:
     for fn in (
         fig_ferm_acidification,
@@ -302,6 +367,7 @@ def main() -> int:
         fig_ferm_uncertainty,
         fig_ferm_covering,
         fig_ferm_importance,
+        fig_ferm_regularized,
     ):
         fn()
     print("done.")

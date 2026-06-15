@@ -326,6 +326,194 @@ def fig_bo_convergence():
     save(fig, "bo_convergence.png")
 
 
+# ── 8. GLM analysis of chromatography data: a probabilistic design space ───────
+@figure
+def fig_chrom_glm():
+    """Logistic + Poisson GLMs over a two-CPP CEX charge-variant separation.
+
+    Each design point is a real ``run_column`` simulation of a 4-component
+    cation-exchange separation (target + three close charge variants); from the
+    pooled chromatogram we record whether the run meets a purity/yield spec
+    (a 0/1 outcome) and how many variants co-elute under the target peak (a
+    count).  Logistic and Poisson GLMs then map the probabilistic design space.
+    """
+    import pandas as pd
+
+    from downstream_doe.doe.analysis import fit_glm_response, predict_glm_grid
+    from downstream_doe.doe.factorial import Factor
+    from downstream_doe.doe.lhs import latin_hypercube
+    from downstream_doe.models.chromatography import (
+        ColumnGeometry,
+        ColumnSetup,
+        ElutionProgram,
+        Injection,
+        cation_exchange,
+        run_column,
+    )
+    from downstream_doe.models.chromatography.metrics import peak_moments, pool_metrics
+
+    geom = ColumnGeometry(length=0.1, diameter=0.01, porosity=0.4)
+    nu = [3.00, 2.93, 3.07, 3.14]          # target + 3 close charge variants
+    nu_ph = [-1.0, -0.7, -1.25, -1.5]      # differing pH sensitivity => pH is a selectivity lever
+    beta = [1.0, 0.95, 1.08, 1.15]
+    feed = np.array([1.0, 0.35, 0.35, 0.35])
+    PUR_SPEC, YLD_SPEC = 0.95, 0.80
+
+    def evaluate(ph, gcv):
+        iso = cation_exchange(beta=beta, nu=nu, ionic_capacity=1000.0, q_max=1.0,
+                              nu_ph=nu_ph, ph_ref=7.0, linear=True)
+        inj = Injection.from_load_density(8.0, feed=feed, porosity=0.4)
+        prog = ElutionProgram.linear_gradient(
+            inj, m_start=300.0, m_end=900.0, gradient_cv=gcv,
+            equilibrate_cv=2.0, wash_cv=2.0, strip_cv=5.0)
+        setup = ColumnSetup(geometry=geom, velocity=2e-3, dispersion=4e-6, isotherm=iso,
+                            program=prog, ph=ph, mass_transfer=5.0, n_cells=80)
+        res = run_column(setup, atol=1e-6, rtol=1e-5)
+        t, ct = res.t, res.c_outlet[0]
+        if ct.max() <= 1e-6:
+            return 0.0, 0.0, 3
+        apex_i = int(np.argmax(ct))
+        sigma = max(peak_moments(t, ct)["sigma"], 1.0)
+        cs, ce = t[apex_i] - 1.5 * sigma, t[apex_i] + 1.5 * sigma
+        pm = pool_metrics(t, res.c_outlet, cut_start=cs, cut_end=ce, target_index=0)
+        # count variants co-eluting under the target apex (> 5% of its height)
+        k = int(sum(res.c_outlet[i, apex_i] > 0.05 * ct[apex_i] for i in (1, 2, 3)))
+        return pm["yield"], pm["purity"], k
+
+    factors = [Factor("pH", 4.5, 6.0), Factor("gradient_cv", 8.0, 40.0)]
+    design = latin_hypercube(factors, 64, seed=7)
+    rows = []
+    for _, r in design.iterrows():
+        y, p, k = evaluate(float(r.pH), float(r.gradient_cv))
+        rows.append(dict(pH=r.pH, gradient_cv=r.gradient_cv, contam=k,
+                         passed=int(p >= PUR_SPEC and y >= YLD_SPEC)))
+    df = pd.DataFrame(rows)
+
+    logit = fit_glm_response(df, "passed", ["pH", "gradient_cv"], family="binomial")
+    pois = fit_glm_response(df, "contam", ["pH", "gradient_cv"], family="poisson")
+    xr, yr = (4.5, 6.0), (8.0, 40.0)
+    Xp, Yp, P = predict_glm_grid(logit, "pH", "gradient_cv", xr, yr, n=80)
+    Xc, Yc, M = predict_glm_grid(pois, "pH", "gradient_cv", xr, yr, n=80)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    # (a) logistic probabilistic design space
+    cs1 = ax1.contourf(Xp, Yp, P, levels=np.linspace(0, 1, 11), cmap="Greens")
+    fig.colorbar(cs1, ax=ax1, fraction=0.046, pad=0.04, label="$P(\\mathrm{meet\\ spec})$")
+    ax1.contour(Xp, Yp, P, levels=[0.9], colors="k", linewidths=2, linestyles="--")
+    ok = df.passed == 1
+    ax1.scatter(df.pH[ok], df.gradient_cv[ok], c="white", edgecolor="k", s=26,
+                label="pass", zorder=3)
+    ax1.scatter(df.pH[~ok], df.gradient_cv[~ok], c=C["hic"], marker="x", s=26,
+                label="fail", zorder=3)
+    ax1.set(xlabel="load pH", ylabel="gradient length (CV)",
+            title=f"(a) logistic: design space  (pseudo-$R^2$={logit.pseudo_r2:.2f})")
+    ax1.legend(fontsize=8, loc="upper right", framealpha=0.9)
+
+    # (b) Poisson expected number of co-eluting variants
+    cs2 = ax2.contourf(Xc, Yc, M, levels=12, cmap="OrRd")
+    fig.colorbar(cs2, ax=ax2, fraction=0.046, pad=0.04, label="$E[\\#\\,\\mathrm{co\\text{-}eluting}]$")
+    sc = ax2.scatter(df.pH, df.gradient_cv, c=df.contam, cmap="OrRd", edgecolor="k",
+                     s=30, zorder=3, vmin=0, vmax=df.contam.max())
+    ax2.set(xlabel="load pH", ylabel="gradient length (CV)",
+            title=f"(b) Poisson: co-eluting variants  (pseudo-$R^2$={pois.pseudo_r2:.2f})")
+    save(fig, "chrom_glm.png")
+
+
+# ── 9. Capture-step breakthrough: a logistic design space for recovery ────────
+@figure
+def fig_capture_glm():
+    """Breakthrough curves and a logistic recovery design space for a CEX capture.
+
+    A single-component frontal-loading study: vary the load density and the load
+    conductivity (salt), measure the recovery (one minus the flow-through loss),
+    and ask---per QbD---for the probability of meeting a recovery spec.  The
+    boundary is genuinely probabilistic because replicate runs carry assay noise.
+    """
+    import pandas as pd
+
+    from downstream_doe.config import make_rng
+    from downstream_doe.doe.analysis import fit_glm_response, predict_glm_grid
+    from downstream_doe.doe.factorial import Factor
+    from downstream_doe.doe.lhs import latin_hypercube
+    from downstream_doe.models.chromatography import (
+        ColumnGeometry,
+        ColumnSetup,
+        ElutionProgram,
+        Injection,
+        Segment,
+        cation_exchange,
+        run_column,
+    )
+    from downstream_doe.perturbation import NoiseModel, add_measurement_noise
+
+    L, dia, eps, feed = 0.1, 0.01, 0.4, 5.0
+    geom = ColumnGeometry(length=L, diameter=dia, porosity=eps)
+    u = L / (eps * 3.0 * 60.0)              # fixed 3-minute residence time
+
+    def run(load_density, salt):
+        iso = cation_exchange(beta=[0.004], nu=[2.5], ionic_capacity=1000.0,
+                              q_max=[55.0], nu_ph=0.0, ph_ref=7.0, linear=False)
+        inj = Injection.from_load_density(load_density, feed=feed, porosity=eps)
+        lcv = inj.duration_cv
+        segs = [Segment("equilibrate", 1.0, salt), Segment("load", lcv, salt),
+                Segment("wash", 6.0, salt)]
+        prog = ElutionProgram(segments=segs, injection=Injection(
+            feed=np.array([feed]), start_cv=1.0, duration_cv=lcv))
+        setup = ColumnSetup(geometry=geom, velocity=u, dispersion=2e-5, isotherm=iso,
+                            program=prog, ph=7.0, mass_transfer=0.08, n_cells=40)
+        res = run_column(setup)
+        t_cv = L / (u * eps)
+        loss = np.trapezoid(res.c_outlet[0], res.t) / (feed * lcv * t_cv)
+        cv_since_load = res.t / t_cv - 1.0          # column volumes since load start
+        return res, cv_since_load, float(np.clip(1.0 - loss, 0.0, 1.0))
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4.6))
+
+    # (a) representative breakthrough curves
+    cases = [(30.0, 50.0, C["cex"], "clean capture (low salt, low load)"),
+             (55.0, 50.0, C["c"], "overload (low salt, high load)"),
+             (30.0, 120.0, C["hic"], "weak binding (high salt)")]
+    for ld, salt, col, label in cases:
+        res, cv, _ = run(ld, salt)
+        ax1.plot(cv, res.c_outlet[0] / feed, color=col, lw=2, label=label)
+    ax1.axhline(0.1, color=C["mod"], ls=":", lw=1.3)
+    ax1.text(0.2, 0.12, "10% breakthrough", fontsize=8, color=C["mod"])
+    ax1.set(xlabel="throughput since load start (CV)",
+            ylabel="$c_{\\rm out}/c_{\\rm feed}$",
+            title="(a) breakthrough curves", xlim=(0, 12), ylim=(-0.02, 1.05))
+    ax1.legend(fontsize=8, loc="center right")
+
+    # (b) logistic recovery design space (replicate noisy assays => probabilistic)
+    factors = [Factor("load_density", 15.0, 55.0), Factor("load_salt", 40.0, 140.0)]
+    base = latin_hypercube(factors, 48, seed=5)
+    yt = np.array([run(float(r.load_density), float(r.load_salt))[2]
+                   for _, r in base.iterrows()])
+    rng = make_rng(11)
+    noise = NoiseModel(additive_sd=0.04)
+    R, SPEC = 5, 0.90
+    rows, pass_frac = [], []
+    for (_, r), y in zip(base.iterrows(), yt):
+        obs = add_measurement_noise(np.arange(R), np.full(R, y), noise, rng)
+        verdicts = (obs >= SPEC).astype(int)
+        pass_frac.append(verdicts.mean())
+        for v in verdicts:
+            rows.append(dict(load_density=r.load_density, load_salt=r.load_salt, passed=int(v)))
+    df = pd.DataFrame(rows)
+
+    glm = fit_glm_response(df, "passed", ["load_density", "load_salt"], family="binomial")
+    X, Y, P = predict_glm_grid(glm, "load_density", "load_salt",
+                               (15.0, 55.0), (40.0, 140.0), n=80)
+    cs = ax2.contourf(X, Y, P, levels=np.linspace(0, 1, 11), cmap="Greens")
+    fig.colorbar(cs, ax=ax2, fraction=0.046, pad=0.04, label="$P(\\mathrm{recovery}\\geq 90\\%)$")
+    ax2.contour(X, Y, P, levels=[0.9], colors="k", linewidths=2, linestyles="--")
+    ax2.scatter(base.load_density, base.load_salt, c=pass_frac, cmap="Greens",
+                edgecolor="k", s=34, vmin=0, vmax=1, zorder=3)
+    ax2.set(xlabel="load density (g/L resin)", ylabel="load conductivity / salt (mM)",
+            title=f"(b) logistic recovery design space  (pseudo-$R^2$={glm.pseudo_r2:.2f})")
+    save(fig, "capture_glm.png")
+
+
 def main() -> int:
     for fn in (
         fig_affinity_laws,
@@ -335,6 +523,8 @@ def main() -> int:
         fig_lhs_vs_random,
         fig_factorial_cube,
         fig_bo_convergence,
+        fig_chrom_glm,
+        fig_capture_glm,
     ):
         fn()
     # General rate model comparison figures (separate module; runs simulations).

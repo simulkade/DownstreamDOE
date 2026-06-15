@@ -18,6 +18,7 @@ all: pdf html
 
 figures:
 	$(PYTHON) scripts/make_figures.py
+	$(PYTHON) scripts/make_foundations_figures.py
 
 pdf: figures
 	REGEN=0 bash scripts/build_pdf.sh

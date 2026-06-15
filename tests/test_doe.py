@@ -116,3 +116,53 @@ def test_lhs_lower_discrepancy_than_random():
     disc_random = qmc.discrepancy(random_unit)
     disc_lhs = qmc.discrepancy(lhs_unit)
     assert disc_lhs < disc_random
+
+
+# ── Generalized linear response models (Chapter 4 GLM application) ─────────────
+
+def _glm_synthetic(seed=0, n=120):
+    """A 2-CPP table with a logistic pass/fail and a Poisson count outcome."""
+    rng = np.random.default_rng(seed)
+    pH = rng.uniform(4.5, 6.0, n)
+    grad = rng.uniform(8.0, 40.0, n)
+    # pass is likely at low pH; count of co-eluters grows with pH
+    eta = 6.0 * (5.0 - pH) + 0.05 * (grad - 24.0)
+    passed = (rng.uniform(size=n) < 1.0 / (1.0 + np.exp(-eta))).astype(int)
+    lam = np.exp(-3.0 + 1.0 * (pH - 4.5))
+    count = rng.poisson(lam)
+    return pd.DataFrame({"pH": pH, "gradient_cv": grad, "passed": passed, "contam": count})
+
+
+def test_fit_glm_logistic_predicts_probabilities():
+    from downstream_doe.doe.analysis import fit_glm_response, predict_glm_grid
+
+    df = _glm_synthetic()
+    res = fit_glm_response(df, "passed", ["pH", "gradient_cv"], family="binomial")
+    assert res.family == "binomial"
+    assert 0.0 <= res.pseudo_r2 <= 1.0
+    # pH should drive the pass probability (negative logit coefficient)
+    assert res.effects["pH"] < 0
+
+    X, Y, P = predict_glm_grid(res, "pH", "gradient_cv", (4.5, 6.0), (8.0, 40.0), n=25)
+    assert P.shape == (25, 25)
+    assert np.all((P >= 0.0) & (P <= 1.0))            # genuine probabilities
+    # low pH should be more likely to pass than high pH
+    assert P[:, 0].mean() > P[:, -1].mean()
+
+
+def test_fit_glm_poisson_predicts_nonnegative_rates():
+    from downstream_doe.doe.analysis import fit_glm_response, predict_glm_grid
+
+    df = _glm_synthetic()
+    res = fit_glm_response(df, "contam", ["pH", "gradient_cv"], family="poisson")
+    assert res.family == "poisson"
+    _, _, M = predict_glm_grid(res, "pH", "gradient_cv", (4.5, 6.0), (8.0, 40.0), n=20)
+    assert np.all(M >= 0)                              # expected counts are non-negative
+
+
+def test_fit_glm_rejects_unknown_family():
+    from downstream_doe.doe.analysis import fit_glm_response
+
+    df = _glm_synthetic()
+    with pytest.raises(ValueError):
+        fit_glm_response(df, "passed", ["pH", "gradient_cv"], family="gaussian")

@@ -22,7 +22,27 @@ Second, it provides the statistical and machine-learning machinery of
 efficiently: factorial designs, space-filling designs, latent-variable analysis,
 and adaptive Bayesian optimisation.
 
-The document is organised into three chapters.
+The document is organised into two parts. \textbf{Part~I (Foundations)} is for the
+reader who arrives strong in one of this book's two parent disciplines but new to
+the other. Because the monograph fuses statistics with downstream separation
+science, it is easy to assume of either field a fluency the reader may not yet
+have; these two chapters supply it, each built from the ground up but curated to
+exactly the ideas the later chapters use.
+
+\begin{itemize}
+  \item \textbf{Chapter~\ref{ch:stats}} introduces the statistical vocabulary---
+  distributions, estimation, least squares and the analysis of variance,
+  cross-validation, the bootstrap, the Bayesian update, and the crucial
+  distinction between \emph{variability} and \emph{uncertainty}---that the design
+  methods rest on.
+
+  \item \textbf{Chapter~\ref{ch:sep}} introduces the separation science---unit
+  operations, the molecules and their impurities, the adsorption isotherm, the
+  column and its plates and resolution, mass transfer, the modulator idea that
+  unifies the chromatography modes, and the basics of microbial fermentation.
+\end{itemize}
+
+\textbf{Part~II (The Virtual Laboratory)} is the technical core.
 
 \begin{itemize}
   \item \textbf{Chapter~\ref{ch:models}} develops the chromatography models. We
@@ -68,7 +88,10 @@ about every such reduction, because knowing the boundary of a model's validity
 is the difference between a tool and a trap.
 
 \vspace{1em}
-\noindent\itshape
+{\itshape\noindent
 The figures in this monograph are generated directly from the package source by
-\code{doc/scripts/make\_figures.py}; the chromatograms are real numerical
-solutions of the models described in the text, not schematics.
+\code{doc/scripts/make\_figures.py} (and, for the foundations chapters,
+\code{make\_foundations\_figures.py}); the chromatograms are real numerical
+solutions of the models described in the text, and even the introductory figures
+are computed from the small teaching module
+\code{downstream\_doe.foundations}---not schematics.\par}
