@@ -343,6 +343,12 @@ def main() -> int:
         make_grm_figures.main()
     except Exception as exc:  # noqa: BLE001
         print(f"  !! GRM figures failed: {exc!r}")
+    # Fermentation, covering-array, and screening figures (Chapter 3).
+    try:
+        import make_fermentation_figures
+        make_fermentation_figures.main()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  !! fermentation figures failed: {exc!r}")
     print("done.")
     return 0
 

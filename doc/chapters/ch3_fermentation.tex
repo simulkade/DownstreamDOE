@@ -1,0 +1,813 @@
+\chapter{The Living Reactor: Milk Fermentation and the Screening of Strains}
+\label{ch:ferment}
+
+\begin{quote}\itshape
+``Fermentation is the consequence of life without air.'' --- Louis Pasteur.
+\end{quote}
+
+\noindent
+The unit operations of the previous chapters are, for all their mathematical
+richness, \emph{clean}. A chromatographic column or an ultrafiltration cassette
+does exactly what its conservation laws say it will, and the quantities we care
+about---concentration, pressure, flux---can be measured more or less directly.
+This chapter turns to an operation of a wholly different character: a
+\emph{fermentation}, in which living bacteria, not a fixed packing, do the work.
+The reactor is a beaker of milk; the catalyst is a community of lactic-acid
+bacteria; the product is yogurt, or one of its many cousins. Three features make
+this a separate intellectual problem, and organise the chapter.
+
+First, the system is \emph{indirectly observed}. We cannot watch the bacteria
+grow or count the molecules of lactose they consume; the one signal a small-scale
+experiment yields cheaply and continuously is the \emph{pH}, a single curve that
+folds together biomass, substrate, acid, and flavour. Section~\ref{sec:ferm-lab}
+describes how the real experiment is run and read.
+
+Second, the system is \emph{irreducibly stochastic}. ``Identical'' batches
+differ---because the inoculum, the milk lot, and the incubator are never quite the
+same---and a single batch wanders, because growth is a noisy process.
+Sections~\ref{sec:ferm-model} and \ref{sec:ferm-noise} build a mechanistic model
+that nonetheless wears its randomness on its sleeve, separating \emph{variability}
+(batch-to-batch biology) from \emph{uncertainty} (the measurement).
+
+Third, the design variable is \emph{combinatorial}. The central question of the
+dairy fermentation industry is not ``what temperature?'' but ``\emph{which
+strains?}''---typically a blend of two to five, drawn from a library of dozens of
+candidates, chosen so that a new culture reproduces the product of an old one
+being retired. Sections~\ref{sec:ferm-screen} and \ref{sec:ferm-analysis} develop
+the design and the analysis for exactly this: \emph{covering arrays} to choose the
+combinations, and \emph{tree-ensemble} learning to find, from noisy data, which
+strains matter.
+
+%==============================================================================
+\section{The real-world experiment}
+\label{sec:ferm-lab}
+
+A yogurt fermentation is deceptively simple to perform and surprisingly hard to
+read. Milk is pasteurised, cooled to an incubation temperature (typically
+$40$--$45^\circ$C for a thermophilic yogurt culture), and \emph{inoculated} with a
+small dose of a \emph{starter}---a defined mixture of bacterial strains. The
+bacteria ferment the milk sugar, \emph{lactose}, into \emph{lactic acid}; the acid
+lowers the pH from that of fresh milk ($\approx 6.6$) and, as the casein micelles
+lose their charge, the milk \emph{gels} into the familiar set. The fermentation is
+stopped---by cooling---when a target pH is reached, conventionally $\mathrm{pH}\,
+4.6$, the isoelectric neighbourhood of casein where the gel is firm.
+
+\subsection{What is measured, and what is not}
+
+The workhorse measurement is a \emph{pH time series}, $\{\mathrm{pH}(t_i)\}$,
+logged by a probe every few minutes over the several hours of the run. From it the
+technologist reads a handful of features (Figure~\ref{fig:ferm-acid}, left): the
+\emph{time to gelation} (pH $5.2$), the \emph{time to set} (pH $4.6$)---the single
+most-reported number in strain screening---the \emph{maximum acidification rate}
+$\max_t(-\dv{\mathrm{pH}}{t})$, and the \emph{post-acidification}, the further
+drop during cold storage that, in excess, is a defect. A complementary off-line
+assay is the \emph{titratable acidity}, the amount of base needed to bring a
+sample back to neutrality, reported in $^\circ$Dornic or as \% lactic acid; it
+measures total acid where pH measures only free protons, the two differing because
+milk is a \emph{buffer}.
+
+What is \emph{not} measured, routinely, is everything mechanistic: the viable cell
+count of each strain (a laborious plating assay), the residual lactose, the
+concentration of each acid and of the aroma compounds (chromatography). The pH
+curve is thus an \emph{indirect, aggregate} indicator---a shadow cast by several
+latent variables at once. Any model of this system is, in effect, a theory of what
+that shadow implies.
+
+\begin{databox}{the pH curve and its features}
+The calibration target for the model is not a single number but the \emph{shape}
+of $\mathrm{pH}(t)$: a fresh-milk plateau, a lag, a steep acidification through
+the gelation region, and a levelling-off as the culture exhausts itself. The
+features above (set time, max rate, post-acidification) are the quantities against
+which strains are compared and against which a model is judged realistic. In the
+package they are computed by \code{fermentation.fingerprint} and
+\code{time\_to\_ph}.
+\end{databox}
+
+\subsection{Why strains, and the replacement problem}
+
+The flavour, texture, acidity, and shelf-life of a cultured product are set
+overwhelmingly by \emph{which bacteria} ferment it. Classical yogurt is the
+symbiosis of two: \emph{Streptococcus thermophilus} and \emph{Lactobacillus
+delbrueckii} subsp.\ \emph{bulgaricus}. Adjunct \emph{probiotic} species
+(\emph{L.\ acidophilus}, \emph{Bifidobacterium}) are added for health claims.
+Strains within a species differ markedly in growth rate, acid tolerance,
+acidifying power, and aroma.
+
+The recurring industrial problem is \emph{replacement}: a strain in a marketed
+product is discontinued (a supplier change, a phage sensitivity, a regulatory
+issue), and a new strain or blend must be found that reproduces the old product's
+sensory and kinetic profile. This is a \emph{matching} problem against a moving
+target, over a combinatorial space of blends---and it is the motivation for the
+designs and analyses of this chapter.
+
+\begin{appbox}{cultured dairy and beyond}
+The same model and methods describe set and stirred yogurt, drinking yogurt,
+cultured buttermilk, sour cream, fresh cheeses, and the acidification phase of
+hard-cheese make. More broadly, any \emph{batch microbial fermentation read out by
+a single aggregate signal}---a probiotic ferment, a sourdough, a silage, even a
+bioprocess monitored only by off-gas or pH---shares the same structure: latent
+biology, an indirect observable, and a combinatorial choice of inoculum.
+\end{appbox}
+
+%==============================================================================
+\section{A mechanistic--stochastic model}
+\label{sec:ferm-model}
+
+We seek the \emph{simplest model that retains the right physics}---the guiding
+principle of this whole package. There is no single accepted mechanistic model of
+yogurt fermentation as there is for chromatography; what follows assembles
+standard, well-validated pieces from predictive microbiology and bioreaction
+engineering into a generator whose output behaves, qualitatively and
+quantitatively, like a real fermentation, and whose randomness is explicit.
+
+\subsection{State variables}
+
+For a consortium of $n$ strains the state at time $t$ (in hours) is
+%
+\begin{equation}
+\bm y(t) = \bigl(\, X_1,\dots,X_n,\; Q_1,\dots,Q_n,\; S,\; L,\; A \,\bigr),
+\end{equation}
+%
+where $X_i$ is the biomass of strain $i$ (a dimensionless scaled cell density),
+$Q_i$ is its \emph{physiological state} (the lag variable introduced below), $S$
+is the lactose concentration (g/L), $L$ is the lactic-acid concentration
+(mmol/L), and $A$ is an aroma proxy (acetaldehyde, in arbitrary units). The pH is
+deliberately \emph{not} a state variable: it is recovered from $L$ at every
+instant through the milk titration curve of Section~\ref{sec:ferm-ph}, so that the
+acid the bacteria produce feeds back, without delay, into their own inhibition.
+
+\subsection{Growth: the Baranyi--Roberts law}
+
+Each strain grows according to the model of Baranyi and Roberts~\cite{baranyi},
+the standard of predictive microbiology, because it represents the \emph{lag
+phase} mechanistically rather than by a switch. Its idea is that cells emerging
+from a dormant inoculum must first build up some limiting intracellular pool before
+they can divide; an \emph{adjustment function} $\alpha_i(t)\in[0,1]$ gates the
+growth rate from zero up to one as that pool fills,
+%
+\begin{equation}
+\alpha_i(t) = \frac{Q_i(t)}{1+Q_i(t)},
+\qquad
+\dv{Q_i}{t} = \mu_{\max,i}\,\gamma_{T,i}\,Q_i,
+\label{eq:baranyi-alpha}
+\end{equation}
+%
+so that $Q_i$ grows exponentially from its inoculation value $Q_i(0)=Q_{0,i}$ and
+$\alpha_i$ follows a smooth logistic switch. Integrating
+Eq.~\eqref{eq:baranyi-alpha} gives the lag duration in closed form,
+%
+\begin{equation}
+\lambda_i = \frac{\ln\!\bigl(1 + 1/Q_{0,i}\bigr)}{\mu_{\max,i}\,\gamma_{T,i}},
+\label{eq:lag}
+\end{equation}
+%
+which exposes the modelling pay-off: a \emph{single} parameter $Q_{0,i}$ sets the
+lag, and---because the physiological state of a real inoculum is genuinely
+variable---making $Q_{0,i}$ random (Section~\ref{sec:ferm-noise}) makes the lag
+random, the most conspicuous source of run-to-run spread in practice. Biomass then
+follows a lag-gated, substrate-limited, acid-inhibited logistic law,
+%
+\begin{equation}
+\dv{X_i}{t}
+= \alpha_i(t)\,\underbrace{\mu_{\max,i}\,
+   \gamma_{T,i}(T)\,
+   \frac{S}{K_{S,i}+S}\,
+   I_i(\mathrm{pH})\,
+   \Gamma_i(\bm X)}_{\textstyle \mu_i \;=\; \text{specific growth rate}}
+\;X_i\,
+\Bigl(1-\frac{X_{\mathrm{tot}}}{X_{\max,i}}\Bigr),
+\label{eq:growth}
+\end{equation}
+%
+with $X_{\mathrm{tot}}=\sum_j X_j$. The four dimensionless factors building $\mu_i$
+are the four sub-models of the next paragraphs: a temperature factor
+$\gamma_{T,i}$, a Monod substrate factor, an acid-inhibition factor $I_i$, and an
+interaction factor $\Gamma_i$. The Monod term $S/(K_{S,i}+S)$~\cite{monod} is the
+classical saturating dependence on the limiting nutrient, with half-saturation
+$K_{S,i}$; the logistic factor caps the total population at the carrying capacity.
+
+\subsection{Temperature: the cardinal model}
+
+Bacterial growth rate depends on temperature in a strongly asymmetric way: it
+rises gently from a minimum, peaks at an optimum, then collapses over a few degrees
+to a maximum above which growth ceases. The \emph{cardinal temperature model with
+inflection} of Rosso et al.~\cite{rosso} captures this with three biologically
+meaningful parameters---the cardinal temperatures $T_{\min}$, $T_{\mathrm{opt}}$,
+$T_{\max}$---and no others:
+%
+\begin{equation}
+\gamma_{T}(T) =
+\frac{(T-T_{\max})(T-T_{\min})^2}
+     {(T_{\mathrm{opt}}-T_{\min})
+      \bigl[(T_{\mathrm{opt}}-T_{\min})(T-T_{\mathrm{opt}})
+           -(T_{\mathrm{opt}}-T_{\max})(T_{\mathrm{opt}}+T_{\min}-2T)\bigr]},
+\label{eq:rosso}
+\end{equation}
+%
+clamped to $\gamma_T=0$ outside $[T_{\min},T_{\max}]$ and normalised so that
+$\gamma_T(T_{\mathrm{opt}})=1$. Multiplying $\mu_{\max}$ by
+Eq.~\eqref{eq:rosso} turns incubation temperature into a genuine process factor and
+gives each strain a distinct thermal niche (Figure~\ref{fig:ferm-sub}, left):
+\emph{S.\ thermophilus} peaks near $42^\circ$C, \emph{L.\ bulgaricus} near
+$45^\circ$C, so the blend's behaviour shifts with temperature in a way no single
+strain reproduces.
+
+\subsection{Acid inhibition}
+
+As acid accumulates the falling pH eventually arrests growth, and it does so at a
+strain-specific threshold---the essence of \emph{acid tolerance}. We use a linear
+ramp from full activity at a reference pH down to zero at the strain's minimum
+growth pH $\mathrm{pH}_{\min,i}$,
+%
+\begin{equation}
+I_i(\mathrm{pH}) =
+\operatorname{clamp}\!\left(
+\frac{\mathrm{pH}-\mathrm{pH}_{\min,i}}{\mathrm{pH}_{\mathrm{ref}}-\mathrm{pH}_{\min,i}},
+\;0,\;1\right).
+\label{eq:acid-inhib}
+\end{equation}
+%
+The consequences are exactly those seen in the dairy: \emph{S.\ thermophilus}, with
+a high $\mathrm{pH}_{\min}\approx 4.7$, stalls early and cannot set milk on its
+own; \emph{L.\ bulgaricus}, tolerant to $\approx 3.8$, drives the final
+acidification and, through maintenance metabolism, the post-acidification.
+
+\subsection{Strain interactions: proto-cooperation}
+
+The yogurt symbiosis is the textbook case of \emph{proto-cooperation}: \emph{S.\
+thermophilus} releases formate and carbon dioxide that stimulate \emph{L.\
+bulgaricus}, whose proteolysis in turn liberates the peptides and amino acids that
+\emph{S.\ thermophilus} needs. We model this as a saturating, pairwise
+multiplicative boost to the growth rate,
+%
+\begin{equation}
+\Gamma_i(\bm X) = \prod_{j\neq i}
+\left(1 + k_{ij}\,\frac{X_j}{X_j+K_c}\right),
+\label{eq:interaction}
+\end{equation}
+%
+where the entry $k_{ij}$ of the consortium's \emph{interaction matrix} is the
+strength with which strain $j$ affects strain $i$: positive for cooperation,
+negative (with $k_{ij}>-1$) for antagonism, zero for independence (the default).
+The half-saturation $K_c$ sets the biomass at which a partner's influence is half
+its maximum. The effect is decisive (Figure~\ref{fig:ferm-coop}): with
+$k_{ij}=0$ the same two strains, blended, stall above the set point; switch
+cooperation on and the pair sets the milk together and faster than either alone.
+
+\subsection{Acid and aroma production}
+
+Acid is produced by both growth and maintenance, the \emph{Luedeking--Piret}
+relation~\cite{luedeking} of bioreaction engineering:
+%
+\begin{equation}
+\dv{L}{t} =
+\sum_i \Bigl( a_i\,\dv{X_i}{t} \;+\; b_i\,I_i(\mathrm{pH})\,X_i \Bigr),
+\label{eq:luedeking}
+\end{equation}
+%
+with a growth-associated coefficient $a_i$ (mmol acid per unit biomass formed) and
+a non-growth maintenance coefficient $b_i$ (mmol acid per unit biomass per hour).
+The maintenance term is gated by the same acid-inhibition factor
+$I_i$ of Eq.~\eqref{eq:acid-inhib}: a strain that has reached its minimum pH stops
+metabolising, which prevents an acid-sensitive strain from acidifying past its own
+stall point yet lets a tolerant strain continue, reproducing post-acidification.
+Lactose is consumed stoichiometrically through the growth-associated yield,
+$\dv{S}{t} = -\sum_i Y_i^{-1}\,\dv{X_i}{t}$ (gated to vanish once $S$ is
+exhausted), and the aroma proxy follows $\dv{A}{t} = \sum_i c_i\,\dv{X_i}{t} -
+k_{\mathrm{dec}}A$, so that the flavour fingerprint shifts with the community
+composition.
+
+\subsection{From acid to pH: milk as a buffer}
+\label{sec:ferm-ph}
+
+The link from the acid the bacteria make to the pH we measure is milk's
+\emph{buffering capacity}. Casein, phosphate, and citrate resist the pH change, so
+the titration curve is a shallow sigmoid, not the straight line a strong acid in
+water would give. Rather than model each buffering species we use an empirical
+titration curve that reproduces the measured shape,
+%
+\begin{equation}
+\mathrm{pH}(L) = \mathrm{pH}_\infty +
+\frac{\mathrm{pH}_0 - \mathrm{pH}_\infty}{1 + (L/L_{50})^{n_{\mathrm{buf}}}},
+\label{eq:titration}
+\end{equation}
+%
+where $\mathrm{pH}_0\approx 6.6$ is fresh milk, $\mathrm{pH}_\infty$ the floor the
+pH asymptotes toward, $L_{50}$ the acid at the curve's midpoint---the practical
+handle on buffering capacity---and $n_{\mathrm{buf}}$ the steepness through the
+gelation region. Because $L_{50}$ and the initial lactose $S_0$ vary appreciably
+between milk lots, they are the natural carriers of one part of the batch
+variability (Section~\ref{sec:ferm-noise}), and they live on the model's
+\code{Milk} object. Figure~\ref{fig:ferm-sub} (right) shows how a lower-buffer
+milk lot reaches any given pH at less acid.
+
+\subsection{The complete system}
+
+Collecting the pieces, the deterministic core is the $2n+3$ coupled ordinary
+differential equations \eqref{eq:baranyi-alpha}--\eqref{eq:titration}, integrated
+(when noise is off) by a stiff solver (\code{scipy}'s LSODA, which handles the
+abrupt lag-to-growth transition). Figure~\ref{fig:ferm-acid} shows a representative
+solution: the single measurable pH curve on the left, and on the right the four
+latent trajectories---two biomasses, lactose, acid---that the pH curve silently
+encodes. This is the heart of the matter: the experiment sees only the left panel
+and must infer the right.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{ferm_acidification.png}
+\caption[A simulated yogurt fermentation]{A representative yogurt batch (a $50{:}50$
+\emph{S.\ thermophilus}/\emph{L.\ bulgaricus} blend at $43^\circ$C). \emph{Left:}
+the only observable---the pH curve---with the gelation and set-point milestones.
+\emph{Right:} the latent states the pH curve aggregates and which the experiment
+never measures directly: the two strains' biomass, the consumed lactose, and the
+accumulated lactic acid.}
+\label{fig:ferm-acid}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{ferm_submodels.png}
+\caption[The three sub-models]{The three constitutive sub-models. \emph{Left:} the
+Rosso cardinal-temperature factor $\gamma_T(T)$, Eq.~\eqref{eq:rosso}, giving each
+strain an asymmetric thermal niche. \emph{Centre:} the Baranyi adjustment function
+$\alpha(t)$, Eq.~\eqref{eq:baranyi-alpha}, whose single parameter $Q_0$ sets the
+lag. \emph{Right:} the milk titration curve $\mathrm{pH}(L)$,
+Eq.~\eqref{eq:titration}, for three buffering capacities.}
+\label{fig:ferm-sub}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.8\linewidth]{ferm_cooperation.png}
+\caption[Strain personalities and the symbiosis]{Strain personalities. \emph{S.\
+thermophilus} alone acidifies fast but stalls above the set point (high
+$\mathrm{pH}_{\min}$); \emph{L.\ bulgaricus} alone is slow but acid-tolerant. The
+cooperative blend (solid green) sets fastest, while the \emph{same} blend with the
+interaction switched off (dashed grey) barely sets---the proto-cooperation of
+Eq.~\eqref{eq:interaction} is what makes yogurt.}
+\label{fig:ferm-coop}
+\end{figure}
+
+\begin{limitbox}{the fermentation model}
+\begin{itemize}
+  \item \textbf{Phenomenological, not first-principles.} Unlike the chromatography
+  models, this is an assembly of standard empirical laws chosen to reproduce the
+  \emph{shape} and \emph{sensitivities} of real fermentations, not a derivation
+  from molecular biology. Its parameters are illustrative, not measured from a
+  specific organism.
+  \item \textbf{The titration curve is empirical.} Eq.~\eqref{eq:titration}
+  mimics milk buffering without modelling the individual buffering species; it is
+  valid over the normal fermentation range, not for extreme acidification.
+  \item \textbf{Well-mixed and isothermal.} Spatial gradients (a real set gel is
+  not stirred) and the small self-heating of metabolism are ignored.
+  \item \textbf{Aroma is a single proxy.} Real flavour is dozens of compounds;
+  the model carries one, as a stand-in for the sensory dimension.
+\end{itemize}
+\end{limitbox}
+
+%==============================================================================
+\section{Three faces of randomness}
+\label{sec:ferm-noise}
+
+The request that gave rise to this model was to ``represent \emph{all} the
+uncertainty.'' It is essential to keep distinct three kinds, which enter at
+different places and must be estimated differently
+(Figure~\ref{fig:ferm-noise}).
+
+\paragraph{Batch variability (aleatoric).}
+Nominally identical batches differ because their \emph{parameters} differ. We model
+this hierarchically: a population mean $\bar\theta$ for each batch parameter, and a
+per-batch draw with a lognormal multiplier,
+%
+\begin{equation}
+\theta^{(b)} = \bar\theta \cdot \exp\!\bigl(\sigma_\theta\,Z\bigr),
+\qquad Z\sim\mathcal N(0,1),
+\label{eq:lognormal-jitter}
+\end{equation}
+%
+so that $\sigma_\theta$ is, for small values, the fractional coefficient of
+variation, and the multiplier is always positive. The jittered parameters are the
+inoculum size, the lag states $Q_{0,i}$, the maximum growth rates, the milk
+buffering $L_{50}$ and lactose $S_0$, and an additive incubator-temperature offset.
+This is the irreducible spread \emph{between} batches; it does not shrink with a
+better instrument, only with better process control. It is generated by
+\code{sample\_batch} (built on the project's
+\code{perturbation.jitter\_parameters}).
+
+\paragraph{Process noise (within-batch).}
+A single fermentation also \emph{wanders}: growth is a stochastic birth process,
+and local fluctuations accumulate. We add an It\^o diffusion term to the biomass
+equations, turning Eq.~\eqref{eq:growth} into the stochastic differential equation
+%
+\begin{equation}
+\dd X_i = f_i(\bm y)\,\dd t + \sigma_{\mathrm{proc}}\,X_i\,\dd W_i,
+\label{eq:sde}
+\end{equation}
+%
+with $f_i$ the deterministic drift and $W_i$ independent Wiener processes; the
+multiplicative form keeps the noise proportional to the population and biomass
+non-negative. It is integrated by the Euler--Maruyama scheme on a fine grid,
+%
+\begin{equation}
+X_i^{(k+1)} = X_i^{(k)} + f_i\,\Delta t
+ + \sigma_{\mathrm{proc}}\,X_i^{(k)}\,\sqrt{\Delta t}\;Z_i^{(k)},
+ \qquad Z_i^{(k)}\sim\mathcal N(0,1),
+\label{eq:euler-maruyama}
+\end{equation}
+%
+with each updated state floored at zero. Setting $\sigma_{\mathrm{proc}}=0$
+recovers the deterministic solver exactly; switching it on makes individual
+trajectories \emph{wobble} rather than being clean shifts of one curve.
+
+\paragraph{Measurement uncertainty (epistemic).}
+Finally, the pH probe is imperfect. We sample the latent pH curve at the probe's
+(coarser) times and add the project's standard measurement model---additive
+Gaussian noise plus an optional calibration bias,
+%
+\begin{equation}
+\widetilde{\mathrm{pH}}(t_i)
+ = \mathrm{pH}(t_i) + \eps_i + \beta,
+\qquad \eps_i\sim\mathcal N(0,\sigma_{\mathrm{meas}}^2),
+\end{equation}
+%
+through \code{observe\_ph}, which reuses \code{perturbation.add\_measurement\_noise}
+so the fermentation probe is treated identically to every other virtual
+instrument. This noise \emph{does} shrink with a better instrument, and it can in
+principle be averaged away by replicate measurements of one batch---which is
+exactly what distinguishes it from the variability above.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{ferm_uncertainty.png}
+\caption[Three kinds of randomness]{The three faces of randomness, kept separate.
+\emph{Left:} measurement uncertainty---probe noise on a single batch. \emph{Centre:}
+batch variability---the spread of forty whole batches drawn from the population of
+Eq.~\eqref{eq:lognormal-jitter}. \emph{Right:} process noise---eight runs of the
+SDE, Eq.~\eqref{eq:sde}, each wandering on its own path. Telling these apart is the
+whole point of separating uncertainty from variability.}
+\label{fig:ferm-noise}
+\end{figure}
+
+\subsection{The product fingerprint and the replacement objective}
+\label{sec:ferm-fingerprint}
+
+To make the replacement problem of Section~\ref{sec:ferm-lab} quantitative we
+summarise a batch by a \emph{fingerprint} vector $\bm f$---the gelation and set
+times, the final pH, the post-acidification, the maximum rate and its timing, the
+final aroma, and the community composition---computed by \code{fingerprint}. Two
+products are then compared by a weighted, scaled distance to a reference $\bm r$
+(the incumbent strain being retired),
+%
+\begin{equation}
+D(\bm f,\bm r) = \sqrt{\;\sum_k w_k
+\left(\frac{f_k - r_k}{s_k}\right)^{\!2}\,},
+\label{eq:fingerprint-dist}
+\end{equation}
+%
+with characteristic scales $s_k$ to non-dimensionalise features of different units
+and weights $w_k$ to emphasise the attributes that matter for a given product. A
+milestone that a candidate never reaches (a set point never attained) is penalised
+by one full scale-unit. Minimising $D$ over the blend composition and process
+conditions \emph{is} the replacement problem, and---being a scalar objective over a
+design space---it plugs directly into the Bayesian-optimisation machinery of
+Chapter~\ref{ch:design}.
+
+%==============================================================================
+\section{Designing the screen: covering arrays and their relatives}
+\label{sec:ferm-screen}
+
+We now confront the combinatorial design problem. Suppose a library of $k=50$
+candidate strains, a budget of $N=200$ experiments, and the practical constraint
+that each experiment is a blend of between two and five strains. Which blends
+should we run?
+
+\subsection{The combinatorial explosion and the pairwise idea}
+
+Exhaustive testing is hopeless: the number of $2$-to-$5$-strain blends of $50$
+strains is
+%
+\begin{equation}
+\sum_{m=2}^{5}\binom{50}{m}
+= \binom{50}{2}+\binom{50}{3}+\binom{50}{4}+\binom{50}{5}
+\approx 2.37\times 10^{6}.
+\end{equation}
+%
+But we do not need every blend. If the response is governed mainly by individual
+strains and by \emph{pairwise} strain interactions---a reasonable first
+hypothesis, and the same order of approximation a factorial design makes for
+continuous factors---then it suffices that \emph{every pair of strains appears
+together in at least one run}. There are only $\binom{50}{2}=1225$ such pairs, a
+number commensurate with a $200$-run budget. This is the principle of a
+\emph{strength-2 covering array}.
+
+\subsection{Covering arrays}
+
+A covering array $\mathrm{CA}(N;t,k,v)$ is an $N\times k$ array over $v$ symbols
+such that in \emph{every} choice of $t$ columns, all $v^t$ combinations of symbols
+appear in at least one row~\cite{colbourn}. The parameter $t$ is the
+\emph{strength}. The classical use is software testing, where $k$ configuration
+options each take $v$ values and a strength-$t$ array exercises every $t$-way
+combination in far fewer than the $v^k$ exhaustive tests.
+
+Our problem is the binary case $v=2$ (a strain is present or absent) at strength
+$t=2$, but with a twist that the textbook construction does not address: a
+\emph{block-size constraint}. A real fermentation blends a few strains, not
+twenty-five, so each row must have between $g_{\min}=2$ and $g_{\max}=5$ ones. With
+that constraint the object is equivalently a \emph{covering design}---a collection
+of small blocks from a $k$-set such that every pair of points lies in some block.
+A counting bound makes the budget concrete: a block of $g$ strains covers
+$\binom{g}{2}$ pairs, so covering all $\binom{k}{2}$ pairs needs at least
+%
+\begin{equation}
+N \;\ge\; \frac{\binom{k}{2}}{\binom{g_{\max}}{2}}
+\label{eq:schonheim}
+\end{equation}
+%
+runs (a Sch\"onheim-type lower bound)---here $1225/10 \approx 123$ runs of five,
+so $200$ is comfortable, with redundancy to spare for the noise.
+
+\paragraph{Greedy construction.}
+The package builds the design greedily (\code{doe/covering.py}). It keeps the set
+of still-uncovered pairs and, for each run, assembles a block by repeatedly adding
+the strain that covers the most \emph{newly} uncovered pairs, seeding from a
+rarely-used strain and breaking ties toward the least-used strain so that
+appearances stay balanced (good replication for the later regression). The block
+size is drawn across the full $[g_{\min},g_{\max}]$ range but \emph{biased toward
+larger blocks while many pairs remain uncovered}---a size-five block covers ten
+pairs, a size-two block only one---so coverage completes without sacrificing the
+required size variety. Crucially the achieved coverage is \emph{reported}, not
+assumed: \code{CoveringArrayDesign.coverage} returns the covered fraction, the
+redundancy, and the appearance balance, so an under-powered budget is visible
+rather than silently failing. Figure~\ref{fig:ferm-cover} shows coverage climbing
+with the number of runs---faster for larger blocks---and the balanced strain usage
+of the design actually used, which co-tests about $92\%$ of all $1225$ pairs with
+each strain appearing roughly fifteen times.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{ferm_covering.png}
+\caption[Covering-array coverage and balance]{\emph{Left:} the fraction of the
+$1225$ strain pairs co-tested as runs accumulate, for three block-size caps; larger
+blocks cover the space faster (Eq.~\eqref{eq:schonheim}). \emph{Right:} the design
+actually used ($50$ strains, $200$ runs, blocks of $2$--$5$) spreads usage evenly
+across strains---each appears $\approx 15$ times---which gives the downstream
+analysis balanced replication.}
+\label{fig:ferm-cover}
+\end{figure}
+
+\begin{prosbox}{covering arrays for screening}
+\begin{itemize}
+  \item \textbf{Combinatorial reach at linear cost.} Guarantees (near-)complete
+  pairwise coverage of a huge combination space in a budget that scales with the
+  number of pairs, not the number of combinations.
+  \item \textbf{Honest diagnostics.} Coverage fraction, redundancy, and balance are
+  computed, so the design's adequacy is measurable before a single experiment.
+  \item \textbf{Balanced and model-agnostic.} Even strain usage suits any
+  downstream analysis; nothing about the design presupposes a particular model.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{covering arrays for screening}
+\begin{itemize}
+  \item \textbf{Pairwise by default.} Strength-2 targets main effects and two-way
+  interactions; genuine three-way synergies need strength-3, at far higher cost.
+  \item \textbf{Coverage, not estimability.} It guarantees that every pair is
+  \emph{seen}, not that every effect is \emph{orthogonally estimable}; the analysis
+  must cope with correlated, non-orthogonal columns.
+  \item \textbf{Greedy, not optimal.} The construction is a good heuristic, not a
+  provably minimum design; the block-size cap can leave a few pairs uncovered.
+\end{itemize}
+\end{consbox}
+
+\subsection{Other designs for strain screening}
+
+Covering arrays are one of several families that attack high-dimensional discrete
+screening; a mature campaign chooses among them by what it assumes
+(Table~\ref{tab:ferm-screen}).
+
+\emph{Fractional factorial and Plackett--Burman designs}~\cite{schmidtbox,plackett}
+treat each strain as a two-level ($\pm$) factor and use a carefully chosen
+\emph{fraction} of the $2^k$ runs. A Plackett--Burman design, built from a Hadamard
+matrix, estimates all $k$ main effects in as few as $k+1$ runs---supremely
+efficient---but \emph{confounds} (aliases) main effects with two-way interactions,
+so it is blind to the strain synergies that matter most in fermentation. Its
+resolution-III economy is the mirror image of the covering array's interaction
+awareness.
+
+\emph{Supersaturated designs} go further, with \emph{fewer runs than factors}
+($N<k$); they can only flag a sparse handful of dominant strains and rely on
+effect sparsity. \emph{Group-testing} designs share the same spirit as the covering
+array---pool many items per test and deconvolve---and are optimal when the goal is
+to \emph{find a few active strains} rather than to map interactions.
+
+When the response depends on the \emph{proportions} of strains rather than merely
+their presence, the proper framework is \emph{mixture design}~\cite{cornell}: the
+blend fractions lie on a simplex $\sum_i x_i = 1$, and \emph{simplex-lattice} or
+\emph{simplex-centroid} designs place points to fit a Scheff\'e mixture polynomial
+%
+\begin{equation}
+y = \sum_i \beta_i x_i + \sum_{i<j}\beta_{ij}x_i x_j + \cdots,
+\label{eq:scheffe}
+\end{equation}
+%
+which has no intercept because the fractions are not independent. Mixture and
+combinatorial views are complementary: a covering array first screens \emph{which}
+strains belong in the blend; a mixture design then optimises \emph{how much} of
+each. Finally, \emph{$D$-optimal} designs choose runs to maximise $\det(\bm
+X\transp\bm X)$ for a \emph{specified} model---ideal once the model form is known,
+but circular for screening, where the model is what we are trying to discover.
+
+\begin{table}[h]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\caption{Screening designs for a large strain library.}
+\label{tab:ferm-screen}
+\begin{tabular}{@{}p{0.22\linewidth} p{0.30\linewidth} p{0.20\linewidth}
+                  p{0.18\linewidth}@{}}
+\toprule
+\textbf{Design} & \textbf{Targets} & \textbf{Runs} & \textbf{Blind to} \\
+\midrule
+Covering array (strength 2) & Presence + all pairwise co-occurrence &
+$\sim\binom{k}{2}/\binom{g_{\max}}{2}$ & Three-way synergy \\
+Plackett--Burman & Main effects only & $k+1$ & All interactions \\
+Supersaturated & A few dominant strains & $<k$ & Most effects \\
+Mixture (simplex) & Blend \emph{proportions} & Model-dependent &
+Presence/absence framing \\
+$D$-optimal & A pre-specified model & Model-dependent & Unmodelled terms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%==============================================================================
+\section{Analysing the data: from ANOVA to trees}
+\label{sec:ferm-analysis}
+
+The screen yields a $200\times 50$ binary \emph{presence matrix} $\bm X$ and a
+noisy response $\bm y$---the final pH, or the (censored) set time. How do we learn
+from it which strains, and which combinations, drive the outcome?
+
+\subsection{Why the linear model struggles here}
+
+The response-surface ANOVA of Chapter~\ref{ch:design} is the natural first thought,
+but it fits this problem poorly. The design is \emph{not orthogonal} (the covering
+array guarantees coverage, not the diagonal $\bm X\transp\bm X$ that makes
+factorial effects independent); the structure is \emph{interaction-heavy and
+threshold-like} (a strain's effect depends sharply on its acid-tolerant partners,
+Eq.~\eqref{eq:interaction}); and to capture pairwise terms explicitly the linear
+model would need $\binom{50}{2}=1225$ interaction columns against $200$ rows---a
+hopelessly underdetermined fit. We need methods that discover interactions
+\emph{implicitly} and tolerate correlated, high-dimensional inputs. Tree ensembles
+do exactly this.
+
+\subsection{Random forests}
+
+A regression \emph{tree} (CART) recursively partitions the input space, at each
+node choosing the split that most reduces the within-node variance of $y$; the
+prediction in a leaf is the mean response there. A single deep tree captures
+interactions automatically---a split on strain $j$ \emph{within} a branch already
+conditioned on strain $i$ is precisely a two-way effect---but it is high-variance,
+fitting noise. The \emph{random forest}~\cite{breiman} tames this by
+\emph{bagging}: it grows $B$ trees, each on a bootstrap resample of the runs and
+each node restricted to a random subset of the strains, and averages them,
+%
+\begin{equation}
+\hat y(\bm x) = \frac1B \sum_{b=1}^{B} T_b(\bm x).
+\end{equation}
+%
+Averaging decorrelated trees cuts variance without raising bias, yielding a robust
+nonlinear predictor that needs little tuning---an excellent default for a noisy
+screen.
+
+\subsection{Gradient boosting and XGBoost}
+
+\emph{Boosting} builds the ensemble the opposite way: instead of averaging
+independent trees it adds them \emph{sequentially}, each new tree fitting the
+errors the current ensemble still makes,
+%
+\begin{equation}
+F_m(\bm x) = F_{m-1}(\bm x) + \nu\, h_m(\bm x),
+\end{equation}
+%
+with $h_m$ a small tree and $\nu$ a learning-rate shrinkage. \code{XGBoost}~\cite{xgboost}
+is the modern realisation, distinguished by a \emph{regularised} objective that it
+optimises with a second-order Taylor expansion. Writing $g_i,h_i$ for the first and
+second derivatives of the loss at run $i$, the objective for adding tree $f$ is
+%
+\begin{equation}
+\mathcal L \simeq \sum_i \Bigl[g_i f(\bm x_i)
+ + \tfrac12 h_i f(\bm x_i)^2\Bigr]
+ + \underbrace{\gamma T + \tfrac12\lambda\|\bm w\|^2}_{\Omega(f)},
+\label{eq:xgb}
+\end{equation}
+%
+where the penalty $\Omega$ charges for the number of leaves $T$ and the magnitude
+of the leaf weights $\bm w$, with $\gamma,\lambda$ controlling complexity. This
+explicit regularisation, plus shrinkage and column subsampling, lets boosting
+extract more signal than a forest when there is signal to extract, at the price of
+more tuning and a greater risk of overfitting noise. Running both
+(Figure~\ref{fig:ferm-imp}) is the honest practice: agreement between two very
+different ensembles is strong evidence that a finding is real.
+
+\subsection{Honest accuracy and importance}
+
+Two diagnostics, computed for both models (\code{doe/importance.py}), make the
+analysis trustworthy. The first is the \emph{cross-validated coefficient of
+determination}: the data are split into $K$ folds, each predicted from a model
+trained on the rest, and
+%
+\begin{equation}
+R^2_{\mathrm{CV}} = 1 -
+\frac{\sum_i \bigl(y_i - \hat y_{-k(i)}(\bm x_i)\bigr)^2}
+     {\sum_i (y_i-\bar y)^2},
+\end{equation}
+%
+where $\hat y_{-k(i)}$ is trained without the fold containing run $i$. Unlike the
+in-sample $R^2$, which a flexible model can drive to one by memorising, $R^2_{\mathrm{CV}}$
+measures genuine out-of-sample prediction.
+
+The second is \emph{permutation importance}, a model-agnostic measure of how much
+each strain matters: randomly shuffle the column for strain $j$ (destroying its
+relationship with $y$ while preserving its marginal distribution), and record the
+resulting \emph{drop} in score,
+%
+\begin{equation}
+I_j = R^2(\text{model}) - \E_{\pi}\!\bigl[R^2(\text{model};\,
+      \text{column } j \text{ permuted})\bigr].
+\label{eq:permimp}
+\end{equation}
+%
+A strain whose shuffling badly hurts prediction is important. Permutation
+importance is used for \emph{both} ensembles---rather than each library's built-in
+impurity or gain measure---precisely so the two are comparable and neither is
+biased toward high-cardinality features.
+
+\subsection{Does it work? Recovery from noise}
+
+Because this is a virtual laboratory we can grade the analysis against ground
+truth. Each library strain has an intrinsic acidifying power, which we can compute
+by simulating it \emph{alone}---something the screen never does, since every run is
+a $2$-to-$5$-strain blend. Figure~\ref{fig:ferm-imp} shows the payoff. From only
+$200$ \emph{noisy} mixture experiments, both ensembles reach a cross-validated
+$R^2\approx 0.56$ on final pH, and the strains they rank most important are exactly
+the genuinely strong acidifiers: the random forest's top ten recover eight of the
+ten strongest, and permutation importance correlates clearly with the true,
+unseen, solo acidifying power. The covering array supplied the coverage; the trees
+supplied the inference; together they turn an impossible combinatorial search into
+a short list of strains worth pursuing.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{ferm_importance.png}
+\caption[Tree-model recovery of influential strains]{Analysis of the $200$-run
+screen. \emph{Left:} permutation importance, Eq.~\eqref{eq:permimp}, for the
+top strains, from a random forest (blue) and XGBoost (orange); the two agree on the
+leaders. \emph{Right:} each strain's recovered importance against its \emph{true}
+acidifying power (negative solo final pH), which the screen never measured
+directly---the strong positive trend shows the influential strains are recovered
+from noisy blends alone.}
+\label{fig:ferm-imp}
+\end{figure}
+
+\begin{prosbox}{tree-ensemble screening analysis}
+\begin{itemize}
+  \item \textbf{Interactions for free.} Trees capture threshold and synergy effects
+  with no need to enumerate interaction terms---decisive when there are more
+  possible pairs than runs.
+  \item \textbf{Robust and honest.} Cross-validated $R^2$ reports true predictive
+  power; permutation importance ranks drivers model-agnostically; agreement between
+  forest and boosting guards against artefacts.
+  \item \textbf{High-dimensional and forgiving.} They handle the wide, sparse,
+  non-orthogonal presence matrix that defeats ordinary regression.
+\end{itemize}
+\end{prosbox}
+
+\begin{consbox}{tree-ensemble screening analysis}
+\begin{itemize}
+  \item \textbf{Correlation, not mechanism.} Importance flags strains that
+  \emph{predict} the outcome, not a causal pathway; confounded strains (often
+  co-occurring by design) can share or steal credit.
+  \item \textbf{Data-hungry for weak effects.} Subtle interactions need more than a
+  few hundred runs to surface above the noise.
+  \item \textbf{Less transparent than ANOVA.} There is no tidy table of signed
+  coefficients with $p$-values---the deliverable a regulatory reviewer may expect.
+\end{itemize}
+\end{consbox}
+
+%==============================================================================
+\section{Synthesis}
+\label{sec:ferm-synth}
+
+\begin{keybox}{the living reactor}
+A fermentation differs from a chromatography column in every respect that makes
+modelling hard---it is alive, indirectly observed, intrinsically variable, and
+chosen combinatorially---yet the same virtual-laboratory discipline applies. A
+mechanistic--stochastic model (Sections~\ref{sec:ferm-model}--\ref{sec:ferm-noise})
+supplies a faithful, randomness-aware oracle; a covering array
+(Section~\ref{sec:ferm-screen}) interrogates a combinatorial space within a real
+budget; tree-ensemble learning (Section~\ref{sec:ferm-analysis}) extracts the few
+strains that matter from noisy data; and the fingerprint distance
+(Section~\ref{sec:ferm-fingerprint}) turns ``reproduce the discontinued product''
+into a scalar objective for the optimiser of Chapter~\ref{ch:design}. Model,
+design, and analysis are, once again, three parts of one instrument---now pointed
+at a beaker of milk.
+\end{keybox}

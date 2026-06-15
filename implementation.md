@@ -285,6 +285,95 @@ is used because physical parameters (rate constants, binding affinities) are pos
 
 ---
 
+### 1.4 Milk fermentation (`models/fermentation/`)
+
+#### Why this model is different
+
+Chromatography and UF/DF are *clean* unit operations with directly measurable outputs.  Milk
+fermentation (yogurt and similar) is the opposite: the only practical online measurement is a
+**pH time series**, which is an *indirect* indicator that lumps together biomass growth,
+lactose consumption, lactic-acid production and flavour development.  The classic lab readout
+is simply *the time for a sample to reach a target pH* — and that time shifts with the
+strain(s) used.  The modelling goal is therefore not high mechanistic fidelity but a
+**stochastic, mechanism-flavoured generator** that reproduces the qualitative behaviour and,
+above all, the *variability*, so the system can serve as a testbed for experimental design,
+uncertainty/variability estimation, and strain-replacement optimisation.
+
+#### Mechanistic core
+
+State vector for ``n`` strains: `y = [X_i, Q_i, S, L, A]` (biomass, Baranyi lag state,
+lactose, lactic acid, aroma).  pH is *not* a state — it is read back from `L` each step, so
+the acid the bacteria make feeds straight into how much they are inhibited.
+
+Growth uses the **Baranyi–Roberts** law (the standard predictive-microbiology model), which
+gives a mechanistic, randomisable lag via a physiological-state variable `Q`:
+
+```
+alpha_i = Q_i / (1 + Q_i)                       # lag gate (0 → 1)
+dQ_i/dt = mu_max_i · gamma_T,i · Q_i            # lag clock; λ = ln(1+1/Q0)/(mu_max·gamma_T)
+mu_i    = mu_max_i · gamma_T,i(T) · S/(K_S,i+S) · I_acid,i(pH) · Π_j g_ij(X_j)
+dX_i/dt = alpha_i · mu_i · X_i · (1 − X_tot/X_max,i)
+```
+
+Sub-laws:
+
+* **Temperature** `gamma_T,i(T)` — Rosso (1993) cardinal-temperature model with inflection,
+  zero outside `[T_min, T_max]`, peaking at `T_opt`.  This makes incubation temperature a real
+  design factor and gives each strain a distinct thermal niche (ST opt ≈ 42 °C, LB ≈ 45 °C).
+* **Acid inhibition** `I_acid,i = clamp((pH − pH_min,i)/(pH_ref − pH_min,i), 0, 1)` — a strain
+  stops growing once the pH reaches its `pH_min`.  ST has a *higher* `pH_min` (≈ 4.7) so it
+  stalls early; LB tolerates ≈ 3.8 and drives the final / post-acidification.
+* **Interaction** `g_ij = Π_{j≠i}(1 + k_ij · X_j/(X_j + K_c))` — saturating mutual
+  stimulation.  For the canonical ST↔LB yogurt pair this encodes **proto-cooperation**: with
+  cooperation off, the independent mix stalls above the set point; with it on, the pair
+  reaches the set point together.
+
+Lactose, acid and aroma are summed over strains.  Acid uses a **Luedeking–Piret** form
+(growth-associated + maintenance); the maintenance term is gated by the same acid inhibition,
+otherwise an acid-sensitive strain would over-acidify past its stall pH.
+
+#### Acid → pH (milk buffering)
+
+Milk's casein/phosphate/citrate buffer makes pH-vs-acid a shallow sigmoid, not a straight
+Henderson–Hasselbalch line.  We use an empirical titration curve:
+
+```
+pH(L) = pH_inf + (pH0 − pH_inf) / (1 + (L / L50)^n_buf)
+```
+
+`L50` (the titration midpoint) is the practical handle on buffering capacity and is a major
+milk-lot variability source, so it lives on the `Milk` dataclass alongside lactose `S0`.
+
+#### Three layers of randomness (the point of the model)
+
+The request was explicitly to *represent all the uncertainty*, separating **uncertainty**
+(measurement) from **variability** (biological).  The model exposes three independent layers:
+
+1. **Batch variability** (`variability.py`, aleatoric) — hierarchical sampling of the batch
+   parameters from a population: inoculum size, lag `Q0`, `mu_max`, milk `L50` and lactose,
+   incubator temperature offset.  Multiplicative factors are lognormal (mirroring
+   `perturbation.jitter_parameters`); this is the irreducible spread between nominally
+   identical batches.
+2. **Process noise** (`engine.py`, optional SDE) — multiplicative Wiener noise on biomass,
+   integrated by Euler–Maruyama.  `process_noise_sd = 0` recovers the deterministic
+   `solve_ivp` (LSODA) solution; non-zero makes individual trajectories *wobble* rather than
+   being clean shifts of one another.
+3. **Measurement noise** (`observe.py`, epistemic) — the pH probe: additive noise + optional
+   calibration bias, reusing the project-wide `perturbation.add_measurement_noise`.  pH is the
+   only observable; everything else stays latent.
+
+#### Product fingerprint and strain replacement (`metrics.py`)
+
+Because "the desirable product" usually means *matching a strain that is being phased out*, the
+model summarises a batch into a **fingerprint** — `t_gel` (pH 5.2), `t_set` (pH 4.6),
+`final_ph`, `post_acidification`, `max_rate`/`t_max_rate`, `aroma`, and final community
+composition — and provides `fingerprint_distance(candidate, reference)`, a weighted, scaled
+distance.  Optimising a strain blend (and process factors) to minimise that distance to a
+reference strain's fingerprint *is* the replacement problem, and plugs directly into the
+existing DoE / Bayesian-optimisation / UQ machinery.
+
+---
+
 ## Phase 2 — Full Factorial DoE (`doe/factorial.py`, `doe/analysis.py`)
 
 ### Design generation
@@ -310,6 +399,56 @@ response ~ pH + salt + load_density + pH:salt + pH:load_density + salt:load_dens
 For each factor, a univariate scan is performed: vary the factor over its training range while holding all others at their mean (centre point).  The factor range where the model prediction stays within the specification bounds `[lo, hi]` is reported as the PAR.
 
 This is a first-order / linear PAR derivation — adequate for a robustness report based on a factorial design.  A full multivariate design space could be visualised from the response surface contour plots.
+
+---
+
+### Covering-array screening & tree-model analysis (`doe/covering.py`, `doe/importance.py`)
+
+#### When factorial designs don't fit
+
+Factorial / LHS designs vary a few *continuous* factors.  Strain selection is a different
+problem: many discrete "ingredients" (e.g. 50 candidate strains), where each experiment is a
+small **combination** (2–5 strains).  The combination space is astronomical
+(`C(50, 2..5)` ≈ 2.4M), but to estimate which strains — and which *pairs* of strains — drive the
+outcome we don't need all of it.  It is enough that **every pair of strains is co-tested in at
+least one run**: a strength-2 **covering array**.
+
+The twist versus a textbook covering array over binary factors is a **block-size constraint**:
+each run activates only `min_size..max_size` items (a real ferment mixes a few strains, not 25).
+This makes it a block-size-constrained covering array — equivalently a covering design over
+pairs.
+
+#### Greedy construction (`covering_array`)
+
+We keep the set of still-uncovered pairs and build each run greedily: seed with a rarely-used
+strain that still has uncovered pairs, then repeatedly add the strain that covers the most
+*newly* uncovered pairs, breaking ties toward the least-used strain so appearances stay balanced
+(good replication for downstream regression).  Block size is drawn across the full
+`[min_size, max_size]` range but **biased toward larger blocks while many pairs remain
+uncovered** (a size-5 block covers `C(5,2)=10` pairs, a size-2 block only 1), so coverage
+completes without sacrificing the requested size variety.
+
+With 50 strains in 200 runs of 2–5 strains, the 1225 pairs are ~90%+ covered with each strain
+used ~15 times.  Coverage is *reported*, not forced — `CoveringArrayDesign.coverage(t)` returns
+the covered fraction, redundancy and appearance balance, so an under-powered budget is visible
+rather than silently failing.  A `StrainLibrary` (`models/fermentation/strains.py`) holds the
+50-strain pool plus the global pairwise interaction matrix and hands out a `Consortium` (with
+the matching interaction submatrix) for any subset the design selects.
+
+#### Tree-model importance (`importance.py`)
+
+The screen's response (final pH; or time-to-set-point, censored at the incubation horizon for
+combinations that never set) is noisy and interaction-heavy, so linear ANOVA is a poor fit.  We
+analyse it with **tree ensembles** — a `RandomForestRegressor` and an XGBoost `XGBRegressor` —
+reporting, for each, a cross-validated R² and **permutation importance**.  Permutation
+importance is used for *both* models (rather than impurity / gain) so the rankings are
+comparable across libraries and unbiased by feature cardinality.
+
+Because the virtual lab knows each strain's intrinsic acidifying power (its solo final pH), the
+screen is self-validating: from only 200 *noisy mixture* experiments — no strain ever tested
+alone — the top permutation-importance strains recover ~8/10 of the genuinely strongest
+acidifiers.  The short list then feeds the fingerprint-matching optimisation (Phase 1.4) to
+choose a replacement blend.
 
 ---
 

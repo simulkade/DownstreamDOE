@@ -22,7 +22,7 @@ Second, it provides the statistical and machine-learning machinery of
 efficiently: factorial designs, space-filling designs, latent-variable analysis,
 and adaptive Bayesian optimisation.
 
-The document is organised into two chapters that mirror this division.
+The document is organised into three chapters.
 
 \begin{itemize}
   \item \textbf{Chapter~\ref{ch:models}} develops the chromatography models. We
@@ -40,6 +40,16 @@ The document is organised into two chapters that mirror this division.
   analysis, and Gaussian-process Bayesian optimisation---is presented with its
   theoretical underpinning, its mathematical formulation, and an honest
   accounting of where it is strong and where it fails.
+
+  \item \textbf{Chapter~\ref{ch:ferment}} turns to a different kind of unit
+  operation---a living \emph{milk fermentation}, the basis of yogurt and cultured
+  dairy. Here the model is mechanistic but irreducibly stochastic, the only
+  observable is an indirect pH curve, and the central design variable is
+  \emph{combinatorial}: which of many candidate strains to blend. The chapter
+  develops the fermentation model and its three layers of randomness, the
+  real-world experiment, the \emph{covering-array} and related designs for
+  screening large strain libraries, and the tree-ensemble methods used to analyse
+  the resulting data.
 \end{itemize}
 
 Throughout, the mathematics is tied back to the code. Where a symbol in an
