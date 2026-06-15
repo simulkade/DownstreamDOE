@@ -14,6 +14,8 @@ dependencies = [
     "emcee>=3.1",
     "arviz>=0.18",
     "pyfvtool",
+    "xgboost>=3.2.0",
+    "scikit-learn>=1.8.0",
 ]
 
 [dependency-groups]
