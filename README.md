@@ -122,4 +122,4 @@ plan.md               development plan and rationale
 
 ## License
 
-MIT — see `pyproject.toml`.
+This project is released under the MIT License — see [LICENSE](LICENSE).
