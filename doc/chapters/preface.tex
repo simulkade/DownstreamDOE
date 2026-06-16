@@ -2,96 +2,45 @@
 \addcontentsline{toc}{chapter}{Preface}
 \markboth{Preface}{Preface}
 
-Downstream processing---the sequence of unit operations that turns a crude
-biological harvest into a pure, formulated drug substance---is where much of the
-cost, the risk, and the intellectual difficulty of a modern biomanufacturing
-process resides. Of those unit operations, \emph{preparative chromatography} is
-the workhorse. It is also, mathematically, the richest: a chromatographic column
-is a distributed-parameter system in which convection, dispersion, and
-nonlinear, multi-component adsorption interact, and whose behaviour swings by
-orders of magnitude as a handful of mobile-phase variables are turned.
+The idea of having a virtual lab came to me during the discussions with my wife,
+who is a development scientist in the dairy industry. She was explaining different
+methods of experimental design that comes up during their discussions with her
+colleagues and how to analyze data specially when the number of experiments are
+limited. You can imagine that a lot of these discussions become speculative until
+the actual experiments are conducted and the data analyzed. If the method is a
+failure, a lot of resources are wasted. I was thinking about some sort of virtual
+laboratory: one that is rooted in the actual mechanisms governing the system under
+investigation. If we can have this mechanistic model, perhaps with some stochastic
+elements in it, we can run the model with the input parameters that come from an
+actual DoE method. A mechanistic stochastic model can even give us the variability
+we can expect in real world. The uncertainty we can mimic by adding noise to the
+virtual ``measurements''. The measurements are another story! We rarely have any
+direct measurement of the desired outcome of an experiment: when we need
+concentration, we measure a peak. When we need to know the stage of a fermentation
+reaction, we measure pH or turbidity. So it is important to have mechanistic models
+that can give us these measured values. During my wife's PhD, she had a special
+course with me on the stochastic models for bacterial growth, so it was relatively
+easy for me to create something based on the formulations I had collected. For the
+downstream biological separation processes, I had a similar model for the
+mass-transfer-controlled oxygen scavenging process using MOFs. The project was with
+my friend Jonas and I wrote a small Julia package for it with a formulation that I
+was very proud of at the time. I fed all these codes and documents (that are in
+\TeX{} format) to Claude Code and asked it to draft a Python package for me. I was
+not very happy with the models because of some simplifications in the mass transfer
+model into porous particles. I first used a general mass transfer model and tried
+to solve it with method of lines but the solver failed (on second thought, I should
+have used a solver suited for stiff ODEs). I therefore switched to our PyFVTool
+finite volume solver. I gave it a sample coupled problem I had solved for
+multiphase flow in porous media. Claude Code, however, really impressed me when it
+managed to use PyFVTool to couple two domains---the chromatographic column and the
+particles---and solve the nonlinear system of PDEs. I gradually extended the
+package based on the DoE methods I had heard before and those that my wife
+explained to me. Eventually, I prompted Claude to convert each module to a chapter
+in a monograph and add two foundation chapters to briefly explain the concepts.
+This part I made for a light reading during a train ride or a fast track method to
+familiarize the potential users to these fascinating concepts. Here we are now! I
+hope you like the product and send me your comments for improvements. I will come
+back to it if my time permits.
 
-This monograph documents the scientific content of the \code{DownstreamDOE}
-software package: a \emph{virtual laboratory} for downstream bioprocess
-development. The package does two things. First, it provides mechanistic,
-first-principles models of chromatography that act as a synthetic ``ground
-truth''---an oracle that, when probed with a set of process conditions, returns
-the chromatogram and the pool quality attributes that a real experiment would.
-Second, it provides the statistical and machine-learning machinery of
-\emph{Design of Experiments} (DoE) that one uses to interrogate such an oracle
-efficiently: factorial designs, space-filling designs, latent-variable analysis,
-and adaptive Bayesian optimisation.
-
-The document is organised into two parts. \textbf{Part~I (Foundations)} is for the
-reader who arrives strong in one of this book's two parent disciplines but new to
-the other. Because the monograph fuses statistics with downstream separation
-science, it is easy to assume of either field a fluency the reader may not yet
-have; these two chapters supply it, each built from the ground up but curated to
-exactly the ideas the later chapters use.
-
-\begin{itemize}
-  \item \textbf{Chapter~\ref{ch:stats}} introduces the statistical vocabulary---
-  distributions, estimation, least squares and the analysis of variance,
-  cross-validation, the bootstrap, the Bayesian update, and the crucial
-  distinction between \emph{variability} and \emph{uncertainty}---that the design
-  methods rest on.
-
-  \item \textbf{Chapter~\ref{ch:sep}} introduces the separation science---unit
-  operations, the molecules and their impurities, the adsorption isotherm, the
-  column and its plates and resolution, mass transfer, the modulator idea that
-  unifies the chromatography modes, and the basics of microbial fermentation.
-\end{itemize}
-
-\textbf{Part~II (The Virtual Laboratory)} is the technical core.
-
-\begin{itemize}
-  \item \textbf{Chapter~\ref{ch:models}} develops the chromatography models. We
-  begin from the governing conservation laws, reduce them to the equations the
-  package actually integrates, and then treat each adsorption mode---ion
-  exchange, hydrophobic interaction, and reversed phase---in turn. For every
-  model we give the full mathematical formulation, a careful description of each
-  parameter and its units, the real-world separation problems the model
-  represents, the assumptions and limitations that bound its validity, and the
-  experiments and data one performs to estimate its parameters.
-
-  \item \textbf{Chapter~\ref{ch:design}} develops the experimental-design
-  methods. Each method---full factorial designs with response-surface analysis,
-  Latin hypercube sampling, principal-component and partial-least-squares
-  analysis, and Gaussian-process Bayesian optimisation---is presented with its
-  theoretical underpinning, its mathematical formulation, and an honest
-  accounting of where it is strong and where it fails.
-
-  \item \textbf{Chapter~\ref{ch:ferment}} turns to a different kind of unit
-  operation---a living \emph{milk fermentation}, the basis of yogurt and cultured
-  dairy. Here the model is mechanistic but irreducibly stochastic, the only
-  observable is an indirect pH curve, and the central design variable is
-  \emph{combinatorial}: which of many candidate strains to blend. The chapter
-  develops the fermentation model and its three layers of randomness, the
-  real-world experiment, the \emph{covering-array} and related designs for
-  screening large strain libraries, and the tree-ensemble methods used to analyse
-  the resulting data.
-\end{itemize}
-
-Throughout, the mathematics is tied back to the code. Where a symbol in an
-equation corresponds to an argument of a function or a field of a data
-structure, we say so, in \code{typewriter} font. The intent is that a reader can
-move from the page to the source and back without losing the thread.
-
-A word on philosophy. The models in this package are deliberately the
-\emph{simplest models that retain the right physics}. The linearised
-Steric-Mass-Action isotherm, the lumped transport-dispersive band-broadening
-term, the film model of ultrafiltration flux: each is a reduction of a more
-complete theory, chosen because it captures the dependence of the response on
-the critical process parameters faithfully while remaining cheap enough to
-evaluate thousands of times inside a design loop. We have tried to be explicit
-about every such reduction, because knowing the boundary of a model's validity
-is the difference between a tool and a trap.
-
-\vspace{1em}
-{\itshape\noindent
-The figures in this monograph are generated directly from the package source by
-\code{doc/scripts/make\_figures.py} (and, for the foundations chapters,
-\code{make\_foundations\_figures.py}); the chromatograms are real numerical
-solutions of the models described in the text, and even the introductory figures
-are computed from the small teaching module
-\code{downstream\_doe.foundations}---not schematics.\par}
+\bigskip
+\noindent\hfill\emph{Ali A. Eftekhari}
