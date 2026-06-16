@@ -39,6 +39,16 @@ Numerics
   surface source -> exact bulk<->particle mass conservation.
 * Fully-implicit (backward-Euler) time stepping; the competitive isotherm
   Jacobian ``dq*/dc_p`` is linearised by Picard iteration each step.
+* The bulk and particle fields are coupled into one global sparse system via
+  :mod:`.coupling` (a repo-local ``CoupledSystem`` assembler), which owns the
+  global index bookkeeping, the film-flux :meth:`~.coupling.Assembler.couple`
+  stamp, and the conservative competitive-storage term
+  (:func:`~.coupling.conservative_storage`).  The accumulation terms use
+  PyFVTool's :func:`~pyfvtool.transientTerm` and the inlet dispersive flux (for
+  the mass balance) uses :func:`~pyfvtool.gradientTerm`.  The coupled system is
+  solved with
+  ``scipy.sparse.linalg.spsolve`` (``solveMatrixPDE`` is single-mesh and does
+  not apply across the bulk+particle meshes).
 
 .. note::
    PyFVTool's spherical ``mesh.cellvolume`` is the midpoint approximation
@@ -55,9 +65,9 @@ from typing import Sequence
 
 import numpy as np
 import pyfvtool as pf
-import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from .coupling import CoupledSystem, conservative_storage
 from .geometry import ColumnGeometry
 from .isotherms import Isotherm
 from .program import CompiledProgram, ElutionProgram
@@ -287,7 +297,6 @@ def run_grm(
     Mbc_p, RHSbc_p = pf.boundaryConditionsTerm(_cp_bc.BCs)
 
     nb = Nz + 2
-    npc = Nr + 2
     dr = Rp / Nr
     a_v = 3.0 * (1.0 - eps) / Rp
     A_R = 4.0 * np.pi * Rp ** 2
@@ -316,36 +325,36 @@ def run_grm(
     mvar.BCs.left.b[:] = 1.0
     mvar.BCs.left.c[:] = compiled.modulator(0.0)
 
-    # ── global protein index helpers ──
-    part_offset = nc * nb
+    # ── coupled global layout (replaces hand-rolled bidx/pidx index algebra) ──
+    # Fields are registered in a fixed order so each lands at a known global
+    # offset; the CoupledSystem owns that bookkeeping (see .coupling).  Bulk:
+    # one axial field per component.  Particle: one spherical field per
+    # (component, axial cell) -- each is its own small mesh, which keeps the
+    # diffusion/BC blocks block-diagonal and makes the film flux a per-cell
+    # coupling rather than an index computation.
+    sys = CoupledSystem()
+    bulk = [sys.add_field(mz, f"c{i}") for i in range(nc)]
+    part = [[sys.add_field(mp, f"cp{i}_{j}") for j in range(Nz)] for i in range(nc)]
+    N = sys.N
 
-    def bidx(i, a):
-        return i * nb + a
+    # interior global-index maps used by the per-step assembly
+    bulk_int = np.concatenate([bulk[i].interior for i in range(nc)])      # (nc*Nz,)
+    part_interior = np.stack([                                            # (nc, Nz*Nr)
+        np.concatenate([part[i][j].interior for j in range(Nz)]) for i in range(nc)
+    ])
 
-    def pidx(i, j, k):
-        return part_offset + i * (Nz * npc) + j * npc + k
-
-    N = nc * nb + nc * Nz * npc
-
-    # static (geometry) part of the protein matrix: bulk transport + BC, particle
-    # diffusion + BC, and the film couplings.  Transient + isotherm capacity are
-    # added per step.
-    M_static = sp.lil_matrix((N, N))
+    # static (geometry) part of the protein matrix: bulk transport, particle
+    # diffusion + BC, and the film couplings.  Transient + isotherm capacity and
+    # the feed-dependent BCs are added per step.
+    asm0 = sys.assembler()
     for i in range(nc):
-        b0 = bidx(i, 0)
-        M_static[b0:b0 + nb, b0:b0 + nb] += Mconv - Mdif_ax
+        asm0.add_block(bulk[i], Mconv - Mdif_ax)
         for j in range(Nz):
-            o = pidx(i, j, 0)
-            M_static[o:o + npc, o:o + npc] += -Mdif_p[i] + Mbc_p
-        # film couplings (bulk interior a=1..Nz <-> particle outer cell k=Nr)
-        for j in range(Nz):
-            gi = bidx(i, 1 + j)
-            surf = pidx(i, j, Nr)
-            M_static[gi, gi] += kb[i]
-            M_static[gi, surf] -= kb[i]
-            M_static[surf, surf] += kp[i]
-            M_static[surf, gi] -= kp[i]
-    M_static = M_static.tocsr()
+            asm0.add_block(part[i][j], -Mdif_p[i] + Mbc_p)
+            # film flux: bulk interior cell (1+j) <-> particle outer cell Nr
+            asm0.couple(bulk[i], 1 + j, part[i][j], Nr, kb[i])   # bulk sink
+            asm0.couple(part[i][j], Nr, bulk[i], 1 + j, kp[i])   # particle source
+    M_static = asm0.matrix()
 
     # modulator matrix (advection-dispersion, Dirichlet inlet); rebuilt RHS each step
     M_mod_static = (Mconv - Mdif_ax).tocsr()
@@ -360,8 +369,9 @@ def run_grm(
     # outputs
     c_out = np.zeros((nc, n_t))
     m_out = np.zeros(n_t)
-    # record initial (t=0)
-    c_out[:, 0] = [x[bidx(i, Nz)] for i in range(nc)]
+    # record initial (t=0); outlet = last interior axial cell (Nz) of each bulk field
+    outlet_gidx = np.array([bulk[i].offset + Nz for i in range(nc)])
+    c_out[:, 0] = x[outlet_gidx]
     m_out[0] = m_state[Nz]
 
     cum_in = 0.0   # cumulative inlet flux (mol, all components)
@@ -398,14 +408,6 @@ def run_grm(
             C[:, i, i] += eps_p
         return C, s0
 
-    # interior-cell global indices (vectorised assembly helpers)
-    bulk_int = np.array([bidx(i, a) for i in range(nc) for a in range(1, Nz + 1)])
-    part_int_rows = {}   # (i) -> array of global interior particle indices, cell-major
-    for i in range(nc):
-        part_int_rows[i] = np.array(
-            [pidx(i, j, k + 1) for j in range(Nz) for k in range(Nr)]
-        )
-
     dt = t_eval[1] - t_eval[0]
     t = t_eval[0]
     out_k = 1
@@ -418,14 +420,14 @@ def run_grm(
         t = t_target
 
         # ---- advance modulator (unretained, linear) ----
+        # accumulation handled by transientTerm (alfa=1): it returns exactly the
+        # 1/dt diagonal and the c_old/dt RHS we would otherwise build by hand.
         m_in = max(compiled.modulator(t), _M_FLOOR)
         mvar.BCs.left.c[:] = m_in
         Mbc_m, RHSbc_m = pf.boundaryConditionsTerm(mvar.BCs)
-        Mm = M_mod_static + Mbc_m + sp.diags(
-            np.concatenate([[0.0], np.full(Nz, 1.0 / dt), [0.0]])
-        )
-        RHSm = RHSbc_m.copy()
-        RHSm[1:Nz + 1] += m_state[1:Nz + 1] / dt
+        Mt_m, RHSt_m = pf.transientTerm(pf.CellVariable(mz, m_state), dt, 1.0)
+        Mm = M_mod_static + Mbc_m + Mt_m
+        RHSm = RHSbc_m + RHSt_m
         m_state = spla.spsolve(Mm.tocsr(), RHSm)
         m_cells = np.maximum(m_state[1:Nz + 1], _M_FLOOR)         # (Nz,)
         # pore modulator = bulk modulator at that axial cell (broadcast over radial)
@@ -442,7 +444,7 @@ def run_grm(
 
         # old stored mass uses the OLD modulator m_part_prev (so a changing
         # gradient is handled exactly by the storage balance below).
-        cp_old = np.stack([x[part_int_rows[i]] for i in range(nc)])   # (nc, Nz*Nr)
+        cp_old = x[part_interior]                                     # (nc, Nz*Nr)
         s_old, _ = storage(cp_old, m_part_prev)                       # (nc, Nz*Nr)
 
         # ---- Picard iteration for the protein system (conservative storage form) ----
@@ -455,39 +457,30 @@ def run_grm(
         x_old = x.copy()
         x_iter = x.copy()
         for _ in range(1 if linear else picard_max):
-            cp_now = np.stack([x_iter[part_int_rows[i]] for i in range(nc)])  # (nc, Nz*Nr)
+            cp_now = x_iter[part_interior]                       # (nc, Nz*Nr)
             C, s_iter = capacity_blocks(cp_now, m_part)          # (Nz*Nr,nc,nc), (nc,Nz*Nr)
 
-            M = M_static.tolil(copy=True)
-            RHS = np.zeros(N)
+            # per-step dynamic terms: feed-dependent bulk BCs, bulk accumulation
+            # (transientTerm, alfa=1), particle BC RHS, and the conservative
+            # competitive particle storage balance.  The CoupledSystem scatters
+            # each contribution to the right global offset.
+            asm = sys.assembler()
             for i in range(nc):
                 Mbc_b, RHSbc_b = bulk_bc_terms[i]
-                b0 = bidx(i, 0)
-                M[b0:b0 + nb, b0:b0 + nb] += Mbc_b
-                RHS[b0:b0 + nb] += RHSbc_b
+                asm.add_block(bulk[i], Mbc_b).add_rhs(bulk[i], RHSbc_b)
+                Mt_b, RHSt_b = pf.transientTerm(
+                    pf.CellVariable(mz, x_old[bulk[i].block]), dt, 1.0)
+                asm.add_block(bulk[i], Mt_b).add_rhs(bulk[i], RHSt_b)
                 for j in range(Nz):
-                    o = pidx(i, j, 0)
-                    RHS[o:o + npc] += RHSbc_p
-            M = M.tocsr()
-            diag = np.zeros(N)
-            diag[bulk_int] += 1.0 / dt
-            RHS[bulk_int] += x_old[bulk_int] / dt
-            # particle storage balance (vectorised); linearised increment on LHS,
-            # exact storage on RHS.
-            lin_inc = np.zeros((nc, Nz * Nr))                    # sum_l C_il c_p*,l
-            for i in range(nc):
-                ri = part_int_rows[i]
-                for l in range(nc):
-                    cl = part_int_rows[l]
-                    coef = C[:, i, l] / dt
-                    if i == l:
-                        diag[ri] += coef
-                    else:
-                        M = M + sp.csr_matrix((coef, (ri, cl)), shape=(N, N))
-                    lin_inc[i] += C[:, i, l] * cp_now[l]
-                RHS[ri] += (lin_inc[i] - s_iter[i] + s_old[i]) / dt
-            M = M + sp.diags(diag)
-            x_new = spla.spsolve(M.tocsr(), RHS)
+                    asm.add_rhs(part[i][j], RHSbc_p)
+            # particle storage: linearised increment on LHS, exact storage on RHS
+            # (uses s_old at the OLD modulator -> machine-precision conservation).
+            rows, cols, vals, ridx, rvals = conservative_storage(
+                part_interior, C, cp_now, s_iter, s_old, dt)
+            asm.add_entries(rows, cols, vals).add_rhs_at(ridx, rvals)
+
+            M = M_static + asm.matrix()
+            x_new = spla.spsolve(M.tocsr(), asm.rhs)
             if linear:
                 x_iter = x_new
                 break
@@ -502,13 +495,17 @@ def run_grm(
         # Inlet (Dirichlet, upwind face value = feed) carries convection + dispersion;
         # outlet (Neumann, upwind) carries convection only.
         for i in range(nc):
-            c1 = x[bidx(i, 1)]
-            cN = x[bidx(i, Nz)]
-            f_in = u * feed[i] + Dax * (feed[i] - c1) / (dz / 2.0)
+            # inlet total flux = convection (Dirichlet face value = feed) minus
+            # dispersion.  gradientTerm gives the FV gradient at the inlet face
+            # straight from the solved ghost cell (BC-consistent), so no hand
+            # finite difference: -Dax * dc/dz|_inlet == Dax*(feed - c1)/(dz/2).
+            grad_in = pf.gradientTerm(pf.CellVariable(mz, x[bulk[i].block]))._xvalue[0]
+            cN = x[bulk[i].offset + Nz]
+            f_in = u * feed[i] - Dax * grad_in
             cum_in += eps * A_col * f_in * dt
             cum_out += eps * A_col * u * cN * dt
 
-        c_out[:, out_k] = [x[bidx(i, Nz)] for i in range(nc)]
+        c_out[:, out_k] = x[outlet_gidx]
         m_out[out_k] = m_state[Nz]
         m_part_prev = m_part
         out_k += 1
@@ -517,9 +514,9 @@ def run_grm(
     c_profile = np.zeros((nc, Nz))
     cp_profile = np.zeros((nc, Nz, Nr))
     for i in range(nc):
-        c_profile[i] = x[bidx(i, 1):bidx(i, Nz + 1)]
+        c_profile[i] = x[bulk[i].offset + 1:bulk[i].offset + Nz + 1]
         for j in range(Nz):
-            o = pidx(i, j, 1)
+            o = part[i][j].offset + 1
             cp_profile[i, j] = x[o:o + Nr]
     # q from isotherm at final pore state
     q_profile = np.zeros((nc, Nz, Nr))

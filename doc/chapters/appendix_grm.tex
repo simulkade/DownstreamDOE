@@ -1,0 +1,327 @@
+\chapter{The finite-volume scheme of the general rate model}
+\label{app:grm}
+
+Section~\ref{sec:grm} introduced the general rate model (GRM) and stated, without
+proof, that its finite-volume discretisation is \emph{mass-conservative by
+construction}. This appendix sets out the numerical method in full: the two
+meshes and the discrete unknowns, the discrete bulk and particle balances, the
+film coupling that ties them together, the fully implicit time step with its
+Picard linearisation of the competitive isotherm, the assembly of the single
+coupled linear system, and the mass-balance accounting used to verify the solver.
+The implementation is \code{models/chromatography/grm.py}, which builds its
+spatial operators with the \code{PyFVTool} finite-volume library and assembles the
+coupled system through the helper module \code{models/chromatography/coupling.py}.
+
+Throughout, $i=1,\dots,n_c$ indexes the protein components, $\eps$ and $\eps_p$ are
+the bed and particle porosities, $u$ the interstitial velocity, $D_{\mathrm{ax}}$
+the axial dispersion, $R_p$ the bead radius, $k_{f,i}$ the film coefficient, and
+$D_{p,i}$ the pore diffusivity, exactly as in Section~\ref{sec:grm}. The continuous
+problem is Eqs.~\eqref{eq:grm-bulk}--\eqref{eq:grm-bc}.
+
+%==============================================================================
+\section{Why finite volumes}
+\label{app:grm-why}
+
+The finite-volume method discretises the \emph{integral} form of a conservation
+law: it divides the domain into non-overlapping control volumes (cells) and, for
+each cell, balances the rate of change of the stored quantity against the fluxes
+through the cell faces. Because a flux leaving one cell is, identically, the flux
+entering its neighbour, whatever leaves one control volume is gained by the next,
+and mass can be neither created nor destroyed by the discretisation---only
+transported across faces or stored within cells. This local-telescoping property
+is what makes the method the natural choice for a model whose entire reason for
+existing (Section~\ref{sec:grm}) is to conserve a strongly retained, easily-lost
+band. The method-of-lines engine of Section~\ref{sec:engine}, by contrast,
+discretises the differential form and leaves conservation to the accuracy of the
+time integrator---which is precisely what fails in the stiff regime.
+
+%==============================================================================
+\section{Two meshes and the discrete unknowns}
+\label{app:grm-mesh}
+
+The GRM lives on two coupled grids:
+
+\begin{itemize}
+  \item an \textbf{axial} Cartesian grid (\code{Grid1D}) of $N_z$ cells of width
+  $\Delta z = L/N_z$ spanning the column, carrying the bulk concentrations
+  $c_i$; and
+  \item for \emph{each} axial cell $j$, a \textbf{radial} spherical grid
+  (\code{SphericalGrid1D}) of $N_r$ shells spanning a representative bead,
+  carrying the pore concentrations $c_{p,i}$.
+\end{itemize}
+
+Each \code{PyFVTool} cell variable carries two \emph{ghost cells} (one beyond each
+boundary) that encode the boundary conditions algebraically, so a field on $N$
+interior cells is stored as a vector of length $N+2$. The discrete unknowns are
+therefore the bulk values $c_{i,a}$ ($a=1,\dots,N_z$ interior, plus two ghosts per
+component) and the pore values $c_{p,i,j,k}$ ($k=1,\dots,N_r$ interior, plus two
+ghosts per $(i,j)$ bead). Counting interior cells, the protein system carries
+$n_c\,(N_z + N_z N_r)$ unknowns; the unretained modulator $m$ adds a further $N_z$
+on the axial grid and is advanced separately.
+
+A geometric subtlety, flagged in Section~\ref{sec:grm}, is settled here once. On
+the spherical grid \code{PyFVTool} stores a midpoint cell volume
+$4\pi r_c^2\,\Delta r$, but its diffusion operator conserves against the
+\emph{true} shell volume
+%
+\begin{equation}
+V_k = \tfrac{4}{3}\pi\bigl(r_{k+1/2}^3 - r_{k-1/2}^3\bigr),
+\label{eq:app-shell}
+\end{equation}
+%
+where $r_{k\pm1/2}$ are the shell face radii. The GRM uses $V_k$ of
+Eq.~\eqref{eq:app-shell} for \emph{all} mass accounting and for the film
+normalisation below, which removes the only inconsistency that would otherwise
+spoil exact conservation.
+
+%==============================================================================
+\section{The discrete bulk balance}
+\label{app:grm-bulk}
+
+Integrating the bulk equation~\eqref{eq:grm-bulk} over axial cell $a$ and dividing
+by the cell volume gives, for each interior cell,
+%
+\begin{equation}
+\dv{c_{i,a}}{t}
+  = -\,\frac{(F^{\mathrm{conv}}_{a+1/2} - F^{\mathrm{conv}}_{a-1/2})}{\Delta z}
+    + \frac{(F^{\mathrm{disp}}_{a+1/2} - F^{\mathrm{disp}}_{a-1/2})}{\Delta z}
+    - \underbrace{\frac{1-\eps}{\eps}\,a_v\,k_{\mathrm{ov},i}\,
+      \bigl(c_{i,a} - c_{p,i,a,N_r}\bigr)}_{\text{film sink}},
+\label{eq:app-bulkdisc}
+\end{equation}
+%
+with $a_v = 3(1-\eps)/R_p$ the external specific area. The two transport terms are
+built by \code{PyFVTool} operators:
+
+\begin{itemize}
+  \item \textbf{Convection} uses \emph{first-order upwinding}
+  (\code{convectionUpwindTerm}): the face concentration is taken from the
+  upstream cell, $F^{\mathrm{conv}}_{a+1/2}=u\,c_{i,a}$ for $u>0$. Upwinding adds a
+  small numerical dispersion but is monotone---it cannot manufacture the negative
+  concentrations that destroy the method-of-lines engine.
+  \item \textbf{Dispersion} uses a central two-point gradient
+  (\code{diffusionTerm}): $F^{\mathrm{disp}}_{a+1/2}=D_{\mathrm{ax}}\,
+  (c_{i,a+1}-c_{i,a})/\Delta z$.
+\end{itemize}
+
+The inlet is a Dirichlet condition $c_i=c_{\mathrm{feed},i}(t)$ imposed through
+the left ghost cell; the outlet is a zero-gradient (Danckwerts) condition. The
+film sink---the last term of Eq.~\eqref{eq:app-bulkdisc}---is deferred to
+Section~\ref{app:grm-film}, because it is shared, identically, with the particle
+balance.
+
+%==============================================================================
+\section{The discrete particle balance}
+\label{app:grm-particle}
+
+Within bead $j$, integrating the particle equation~\eqref{eq:grm-part} over shell
+$k$ gives a balance between the change of \emph{stored} solute and the diffusive
+fluxes through the inner and outer shell faces,
+%
+\begin{equation}
+V_k\,\dv{s_{i,j,k}}{t}
+  = \eps_p D_{p,i}\Bigl(A_{k+1/2}\,\tfrac{c_{p,i,j,k+1}-c_{p,i,j,k}}{\Delta r}
+                       - A_{k-1/2}\,\tfrac{c_{p,i,j,k}-c_{p,i,j,k-1}}{\Delta r}\Bigr),
+\label{eq:app-partdisc}
+\end{equation}
+%
+where $A_{k\pm1/2}=4\pi r_{k\pm1/2}^2$ are the shell face areas and
+%
+\begin{equation}
+s_{i} \;=\; \eps_p\,c_{p,i} + (1-\eps_p)\,\qstar_i(\bm c_p, m, \mathrm{pH})
+\label{eq:app-storage}
+\end{equation}
+%
+is the \emph{stored} solute per unit particle volume---mobile pore liquid plus
+adsorbed phase---evaluated with the \emph{same} isotherm $\qstar$ as everywhere
+else in the package. The spherical radial Laplacian of
+Eq.~\eqref{eq:app-partdisc} is exactly \code{PyFVTool}'s spherical
+\code{diffusionTerm}. The centre face $k=\tfrac12$ has zero area, which enforces
+the symmetry condition $\partial c_{p,i}/\partial r|_{0}=0$ automatically; the
+outer face $k=N_r+\tfrac12$ carries the film flux of the next section.
+
+%==============================================================================
+\section{The film coupling as one shared discrete flux}
+\label{app:grm-film}
+
+The film boundary condition~\eqref{eq:grm-bc} sets the flux that crosses the bead
+surface. The scheme combines the two outer resistances---the film proper and the
+diffusion across the outermost half-shell---in series, giving an effective
+coefficient
+%
+\begin{equation}
+k_{\mathrm{ov},i}
+  = \left(\frac{1}{k_{f,i}} + \frac{\Delta r/2}{\eps_p D_{p,i}}\right)^{\!-1},
+\label{eq:app-kov}
+\end{equation}
+%
+and defines a single discrete surface flux
+$\Phi_{i,j}=k_{\mathrm{ov},i}\bigl(c_{i,a(j)}-c_{p,i,j,N_r}\bigr)$ between the bulk
+cell $a(j)$ and the outer pore cell $N_r$ of its bead. The decisive design choice
+is that the \emph{same} number $\Phi_{i,j}$ enters two places with opposite sign:
+
+\begin{itemize}
+  \item as a \textbf{sink} in the bulk cell, the film term of
+  Eq.~\eqref{eq:app-bulkdisc} with $k_{\mathrm{ov},i}$ in place of $k_{f,i}$; and
+  \item as a \textbf{source} on the bead surface cell, the outer-face flux of
+  Eq.~\eqref{eq:app-partdisc}, normalised by the true outer shell volume
+  $V_{N_r}$ of Eq.~\eqref{eq:app-shell}.
+\end{itemize}
+
+Because what the bulk loses through $\Phi_{i,j}$ the bead gains exactly---the same
+discrete quantity, not two separately discretised approximations of it---the
+bulk$\leftrightarrow$bead exchange conserves mass to machine precision regardless
+of mesh resolution. In the assembled matrix this is four entries per
+$(i,j)$ pair: $+$ on the bulk diagonal and $-$ on the bulk--surface off-diagonal,
+$+$ on the surface diagonal and $-$ on the surface--bulk off-diagonal. The helper
+\code{coupling.Assembler.couple} stamps exactly this quartet, so the sign
+bookkeeping lives in one tested place rather than being rewritten per model.
+
+%==============================================================================
+\section{Implicit time stepping and the Picard linearisation}
+\label{app:grm-time}
+
+The scheme is advanced by \emph{backward Euler} (fully implicit): all spatial
+terms are evaluated at the new time level $n+1$, which is unconditionally stable
+and lets the stiff film and adsorption terms be taken in a single robust step. The
+difficulty is that the stored solute~\eqref{eq:app-storage} depends nonlinearly,
+and \emph{competitively}, on the new pore concentrations through
+$\qstar_i(\bm c_p)$: every component's loading depends on every component's
+concentration.
+
+The model handles this in \emph{storage form} with a Picard (fixed-point)
+linearisation. The exact implicit particle balance for shell $k$ reads
+%
+\begin{equation}
+\frac{s_i(\bm c_p^{\,n+1}, m^{n+1}) - s_i(\bm c_p^{\,n}, m^{n})}{\Delta t}
+  = \mathcal{D}_i\bigl[\bm c_p^{\,n+1}\bigr],
+\label{eq:app-implicit}
+\end{equation}
+%
+with $\mathcal{D}_i$ the discrete diffusion operator of
+Eq.~\eqref{eq:app-partdisc}. Linearising the new-time storage about the current
+Picard iterate $\bm c_p^{*}$ through the \emph{capacity Jacobian}
+%
+\begin{equation}
+C_{i\ell} \;=\; \pdv{s_i}{c_{p,\ell}}
+  \;=\; \eps_p\,\delta_{i\ell} + (1-\eps_p)\,\pdv{\qstar_i}{c_{p,\ell}},
+\label{eq:app-capacity}
+\end{equation}
+%
+and rearranging so the exact storage stays on the right-hand side gives the linear
+update solved at each iteration,
+%
+\begin{equation}
+\sum_\ell \frac{C_{i\ell}}{\Delta t}\,c_{p,\ell}^{\,n+1} - \mathcal{D}_i\bigl[\bm c_p^{\,n+1}\bigr]
+  = \frac{1}{\Delta t}\Bigl(\sum_\ell C_{i\ell}\,c_{p,\ell}^{*}
+        - s_i(\bm c_p^{*}, m^{n+1}) + s_i(\bm c_p^{\,n}, m^{n})\Bigr).
+\label{eq:app-picard}
+\end{equation}
+%
+The competitive cross-terms $C_{i\ell}$ ($i\neq\ell$) are obtained by a cheap
+finite-difference perturbation of the isotherm and couple the components within
+each shell. The construction has two properties worth stating explicitly, both
+exploited deliberately:
+
+\begin{keybox}{Why the storage form conserves mass exactly}
+At Picard convergence $\bm c_p^{\,n+1}=\bm c_p^{*}$, so the linearised terms
+$\sum_\ell C_{i\ell}c_{p,\ell}$ cancel between the two sides of
+Eq.~\eqref{eq:app-picard} and what remains is precisely the \emph{exact} implicit
+balance~\eqref{eq:app-implicit}: the change in true stored mass equals the net
+diffusive flux. No separate $\dd q/\dd t$ source is introduced, so no
+discretisation of the adsorption rate can leak mass. Moreover the \emph{old}
+storage $s_i(\bm c_p^{\,n},m^{n})$ is evaluated at the \emph{old} modulator
+$m^{n}$, so a moving salt gradient is differenced exactly rather than frozen---the
+single device that lets one term capture both the nonlinear isotherm and the
+changing gradient. For a linear isotherm $C$ is constant and one solve suffices;
+otherwise the iteration is repeated to a relative tolerance (typically a handful
+of steps).
+\end{keybox}
+
+The implementation of Eq.~\eqref{eq:app-picard} is the helper
+\code{coupling.conservative\_storage}; the diagonal accumulation it reduces to for
+the bulk field and the modulator is \code{PyFVTool}'s \code{transientTerm}.
+
+%==============================================================================
+\section{Assembling and solving the coupled system}
+\label{app:grm-assembly}
+
+\code{PyFVTool}'s own solvers target a single field on a single mesh. The GRM
+instead couples $n_c$ bulk fields and $n_c N_z$ particle fields across two mesh
+types into \emph{one} sparse system, so the discrete operators of the preceding
+sections must be placed into a common global matrix. This index bookkeeping is the
+job of \code{coupling.CoupledSystem}: each field is registered and handed a
+contiguous block of the global unknown vector, and an \code{Assembler} scatters
+every local operator block (convection, dispersion, diffusion, boundary terms,
+the transient diagonal) to its block while \code{couple} stamps the inter-field
+film quartet of Section~\ref{app:grm-film}. The geometric (constant) part of the
+matrix---transport, pore diffusion, boundary structure, and the film
+couplings---is assembled \emph{once}; only the feed-dependent inlet condition and
+the state-dependent capacity blocks~\eqref{eq:app-capacity} are rebuilt each step
+and added to it.
+
+The resulting system $\bm M\,\bm x = \bm b$ is a single large, sparse,
+\emph{non-symmetric} linear system (non-symmetric because of upwind convection and
+the asymmetric film coupling), solved by a sparse \textsc{lu} factorisation
+(\code{scipy.sparse.linalg.spsolve}). A direct solve is appropriate here: the
+system is one-dimensional in structure and moderately sized, and the
+factorisation is robust for the stiff, ill-conditioned blocks the film and
+adsorption terms produce. \code{PyFVTool}'s \code{solveMatrixPDE} is \emph{not}
+used, as it reshapes a solution onto a single mesh and so does not apply across the
+coupled bulk-and-particle meshes.
+
+\begin{keybox}{One time step, end to end}
+\begin{enumerate}\setlength\itemsep{2pt}
+  \item Advance the unretained modulator $m$ on the axial mesh (a small linear
+  solve, accumulation by \code{transientTerm}).
+  \item Freeze the old storage $s_i(\bm c_p^{\,n}, m^{n})$ at the old modulator.
+  \item Picard loop until converged: evaluate the capacity blocks $C_{i\ell}$ at
+  the current iterate; assemble the dynamic terms (feed inlet, bulk accumulation,
+  conservative storage) onto the cached static matrix; solve the coupled sparse
+  system for $\bm x^{n+1}$.
+  \item Accumulate the inlet and outlet boundary fluxes for the mass balance,
+  reading the inlet dispersive gradient from \code{PyFVTool}'s \code{gradientTerm}.
+\end{enumerate}
+\end{keybox}
+
+%==============================================================================
+\section{Mass-balance accounting and verification}
+\label{app:grm-massbalance}
+
+The solver reports a single dimensionless figure of merit, the relative
+mass-balance closure error
+%
+\begin{equation}
+\mathcal{E}
+  = \frac{\;m_{\mathrm{in}} - m_{\mathrm{out}} - \Delta m_{\mathrm{stored}}\;}
+         {m_{\mathrm{in}}},
+\label{eq:app-massbal}
+\end{equation}
+%
+where $m_{\mathrm{in}}$ and $m_{\mathrm{out}}$ are the time-integrated inlet and
+outlet fluxes (carried in the void at the interstitial velocity, the inlet
+including its dispersive contribution) and $\Delta m_{\mathrm{stored}}$ is the
+total accumulated solute---bulk liquid plus, weighted by the true shell volumes
+$V_k$ of Eq.~\eqref{eq:app-shell} and the number of beads per axial cell, the
+pore and adsorbed phases. Equation~\eqref{eq:app-massbal} is an independent
+audit: it is computed from the boundary fluxes and the final state, not used in
+the solve, so a small $\mathcal{E}$ genuinely certifies conservation.
+
+In practice $\mathcal{E}$ sits at the $10^{-14}$--$10^{-11}$ level---machine
+precision---across the single-component breakthrough, the strongly-bound
+multi-component isocratic load, and the competitive gradient elution that
+motivated the model, confirming the construction of
+Sections~\ref{app:grm-film}--\ref{app:grm-time}. This is the quantitative content
+of Figure~\ref{fig:grm-cons}: where the method-of-lines engine loses essentially
+all of the injected mass, the finite-volume GRM closes its balance to the last
+few digits of floating-point.
+
+\begin{remark}
+The cost is the price of fidelity. Each step solves a coupled implicit system in
+$n_c(N_z + N_z N_r)$ unknowns, possibly several times per step through the Picard
+loop. Caching the static matrix, assembling the dynamic terms by sparse triplets
+rather than dense slicing, and using a direct factorisation keep this practical,
+but the GRM remains the reference solver for mechanism and conservation studies
+rather than the tool for rapid design-space sweeps---for which the lumped engine
+of Section~\ref{sec:engine} is retained.
+\end{remark}
