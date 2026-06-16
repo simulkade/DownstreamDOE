@@ -2,6 +2,18 @@
 
 **A virtual laboratory for downstream-bioprocess characterization and advanced Design of Experiments (DoE).**
 
+<p align="center">
+  <a href="https://github.com/simulkade/DownstreamDOE/releases/latest/download/monograph.pdf">
+    <img src="https://img.shields.io/badge/%F0%9F%93%95%20Read%20the%20Monograph-PDF-EC1C24?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="Download the monograph (PDF)">
+  </a>
+  &nbsp;
+  <a href="https://github.com/simulkade/DownstreamDOE/releases/latest/download/monograph.html">
+    <img src="https://img.shields.io/badge/%F0%9F%8C%90%20Read%20the%20Monograph-HTML-E34F26?style=for-the-badge&logo=html5&logoColor=white" alt="Download the monograph (HTML)">
+  </a>
+</p>
+
+<p align="center"><em>A book-length treatment of the science inside the package — every figure generated directly from the source.<br>Grab the typeset <strong>PDF</strong>, or the single self-contained <strong>HTML</strong> page (figures &amp; styling embedded).</em></p>
+
 DownstreamDOE pairs first-principles process models with a modern DoE / optimization / uncertainty-quantification toolkit. Mechanistic models of **chromatography** and **ultrafiltration/diafiltration (UF/DF)** provide a fully-observable *"Mechanistic Truth"*; a perturbation layer turns that truth into noisy *"Virtual Experiments"*; and classical DoE, Bayesian optimization, and uncertainty quantification are exercised against that known ground truth. Because the truth is known, every method can be benchmarked for accuracy, efficiency, and robustness — something impossible with real wet-lab data alone.
 
 The workflow mirrors a real **QbD / process-characterization** campaign: define critical process parameters (CPPs), screen them with a factorial design, map the design space with space-filling sampling, drive toward an optimum with Bayesian optimization, and finally quantify how much of the residual uncertainty is reducible (epistemic) versus irreducible process noise (aleatoric).
