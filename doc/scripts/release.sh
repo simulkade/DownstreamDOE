@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Local build-and-release of the monograph.
+#
+#   bash scripts/release.sh             # tag = v<version> from pyproject.toml
+#   bash scripts/release.sh v0.2.0      # explicit tag
+#   REGEN=0 bash scripts/release.sh     # reuse existing figures (skip regeneration)
+#
+# Builds two self-contained, downloadable assets and attaches them to a GitHub
+# Release (created if absent, otherwise its assets are refreshed):
+#
+#   build/release/monograph.pdf   - the typeset PDF (pdflatex/latexmk)
+#   build/release/monograph.html  - ONE self-contained web page: every figure
+#                                   and the stylesheet are embedded as data URIs,
+#                                   so the file renders on its own after download.
+#                                   (Equations are rendered client-side via the
+#                                   MathJax CDN, so viewing math needs a network.)
+#
+# Requires: pdflatex + latexmk, pandoc (>= 2.19 for --embed-resources), and an
+# authenticated `gh` (run `gh auth status`).
+set -euo pipefail
+
+DOC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$DOC_DIR/.." && pwd)"
+REL_DIR="$DOC_DIR/build/release"
+cd "$DOC_DIR"
+mkdir -p "$REL_DIR"
+
+VERSION="$(grep -iE '^version' "$ROOT_DIR/pyproject.toml" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+TAG="${1:-v$VERSION}"
+
+# --- 1. figures (shared by both outputs) -------------------------------------
+if [[ "${REGEN:-1}" != "0" ]]; then
+  echo ">> Generating figures from the package ..."
+  PY="${PYTHON:-}"
+  if [[ -z "$PY" ]]; then
+    if [[ -x "$ROOT_DIR/.venv/bin/python" ]]; then PY="$ROOT_DIR/.venv/bin/python"; else PY="python3"; fi
+  fi
+  "$PY" "$DOC_DIR/scripts/make_figures.py"            || echo "!! figure generation failed; continuing"
+  "$PY" "$DOC_DIR/scripts/make_foundations_figures.py" || echo "!! foundations figure generation failed; continuing"
+fi
+
+# --- 2. PDF ------------------------------------------------------------------
+echo ">> Building PDF ..."
+REGEN=0 bash "$DOC_DIR/scripts/build_pdf.sh"
+cp -f "$DOC_DIR/build/monograph.pdf" "$REL_DIR/monograph.pdf"
+
+# --- 3. self-contained HTML --------------------------------------------------
+echo ">> Building self-contained HTML ..."
+MATHJAX_URL="${MATHJAX_URL:-https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js}"
+pandoc main.tex \
+  --from=latex --to=html5 \
+  --standalone --embed-resources \
+  --toc --toc-depth=2 --number-sections \
+  --mathjax="$MATHJAX_URL" \
+  --metadata title="DownstreamDOE — A Monograph" \
+  --resource-path=".:figures" \
+  --css="scripts/monograph.css" \
+  --output="$REL_DIR/monograph.html"
+
+# --- 4. GitHub release -------------------------------------------------------
+TITLE="DownstreamDOE Monograph $TAG"
+NOTES=$(cat <<EOF
+Downloadable monograph build.
+
+- **monograph.pdf** — the typeset PDF.
+- **monograph.html** — a single self-contained web page (figures and styling embedded; equations rendered via MathJax).
+
+Every figure is generated directly from the package source.
+EOF
+)
+
+echo ">> Publishing release $TAG ..."
+if gh release view "$TAG" >/dev/null 2>&1; then
+  gh release upload "$TAG" "$REL_DIR/monograph.pdf" "$REL_DIR/monograph.html" --clobber
+else
+  gh release create "$TAG" "$REL_DIR/monograph.pdf" "$REL_DIR/monograph.html" \
+    --title "$TITLE" --notes "$NOTES"
+fi
+echo ">> Done: release $TAG carries monograph.pdf + monograph.html"
