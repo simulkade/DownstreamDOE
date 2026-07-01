@@ -98,5 +98,5 @@ if [[ "${PAGES:-1}" != "0" ]]; then
   )
   git -C "$ROOT_DIR" worktree remove --force "$WT"
   git -C "$ROOT_DIR" branch -D gh-pages-tmp >/dev/null 2>&1 || true
-  echo ">> Pages updated: https://simulkade.github.io/DownstreamDOE/"
+  echo ">> Pages updated: https://simulkade.github.io/VirtualLabDOE/"
 fi

@@ -3,11 +3,11 @@
 **A virtual laboratory for downstream-bioprocess characterization and advanced Design of Experiments (DoE).**
 
 <p align="center">
-  <a href="https://github.com/simulkade/DownstreamDOE/releases/latest/download/monograph.pdf">
+  <a href="https://github.com/simulkade/VirtualLabDOE/releases/latest/download/monograph.pdf">
     <img src="https://img.shields.io/badge/%F0%9F%93%95%20Read%20the%20Monograph-PDF-EC1C24?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="Download the monograph (PDF)">
   </a>
   &nbsp;
-  <a href="https://simulkade.github.io/DownstreamDOE/">
+  <a href="https://simulkade.github.io/VirtualLabDOE/">
     <img src="https://img.shields.io/badge/%F0%9F%8C%90%20Read%20the%20Monograph-HTML-E34F26?style=for-the-badge&logo=html5&logoColor=white" alt="Read the monograph (HTML, in browser)">
   </a>
 </p>
