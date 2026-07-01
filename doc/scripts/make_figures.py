@@ -539,6 +539,12 @@ def main() -> int:
         make_fermentation_figures.main()
     except Exception as exc:  # noqa: BLE001
         print(f"  !! fermentation figures failed: {exc!r}")
+    # Benchtop physical/chemical systems (Chapter 4).
+    try:
+        import make_benchtop_figures
+        make_benchtop_figures.main()
+    except Exception as exc:  # noqa: BLE001
+        print(f"  !! benchtop figures failed: {exc!r}")
     print("done.")
     return 0
 

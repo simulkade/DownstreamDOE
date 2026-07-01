@@ -1,6 +1,6 @@
 [project]
 name = "DownstreamDOE"
-version = "0.1.0"
+version = "0.2.0"
 description = "Virtual laboratory for downstream bioprocess characterization & advanced DoE (chromatography + UF/DF mechanistic models, factorial/LHS designs, Bayesian optimization, and UQ)"
 readme = "README.md"
 requires-python = ">=3.13"

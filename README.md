@@ -7,12 +7,12 @@
     <img src="https://img.shields.io/badge/%F0%9F%93%95%20Read%20the%20Monograph-PDF-EC1C24?style=for-the-badge&logo=adobeacrobatreader&logoColor=white" alt="Download the monograph (PDF)">
   </a>
   &nbsp;
-  <a href="https://github.com/simulkade/DownstreamDOE/releases/latest/download/monograph.html">
-    <img src="https://img.shields.io/badge/%F0%9F%8C%90%20Read%20the%20Monograph-HTML-E34F26?style=for-the-badge&logo=html5&logoColor=white" alt="Download the monograph (HTML)">
+  <a href="https://simulkade.github.io/DownstreamDOE/">
+    <img src="https://img.shields.io/badge/%F0%9F%8C%90%20Read%20the%20Monograph-HTML-E34F26?style=for-the-badge&logo=html5&logoColor=white" alt="Read the monograph (HTML, in browser)">
   </a>
 </p>
 
-<p align="center"><em>A book-length treatment of the science inside the package — every figure generated directly from the source.<br>Grab the typeset <strong>PDF</strong>, or the single self-contained <strong>HTML</strong> page (figures &amp; styling embedded).</em></p>
+<p align="center"><em>A book-length treatment of the science inside the package — every figure generated directly from the source.<br>Download the typeset <strong>PDF</strong>, or read the <strong>HTML</strong> edition straight in your browser (figures &amp; styling embedded).</em></p>
 
 DownstreamDOE pairs first-principles process models with a modern DoE / optimization / uncertainty-quantification toolkit. Mechanistic models of **chromatography** and **ultrafiltration/diafiltration (UF/DF)** provide a fully-observable *"Mechanistic Truth"*; a perturbation layer turns that truth into noisy *"Virtual Experiments"*; and classical DoE, Bayesian optimization, and uncertainty quantification are exercised against that known ground truth. Because the truth is known, every method can be benchmarked for accuracy, efficiency, and robustness — something impossible with real wet-lab data alone.
 
@@ -27,6 +27,7 @@ The workflow mirrors a real **QbD / process-characterization** campaign: define 
 | **Mechanistic models** | `models/chromatography/` | Multi-mode column engine: **cation/anion exchange (CEX/AEX), HIC salting-out, RP-HPLC**, and nonlinear high-resolution IEX — one transport-dispersive (LDF) solver, mode set by the isotherm law. Multi-component, with **linear-gradient elution** and overload; computes chromatograms, **yield/purity/productivity**, resolution & plate count. The original single-component isocratic model is retained for backward compatibility. |
 | | `models/ufdf.py` | Ultrafiltration/diafiltration with a combined pressure-limited + gel-polarisation flux model; cross-flow velocity is a physical CPP. Mass-balance ODEs for the UF (concentrating) and DF (buffer-exchange) phases. |
 | | `models/fermentation/` | Stochastic milk-fermentation (yogurt) model: multi-strain Baranyi–Roberts growth with a Rosso temperature law, ST↔LB proto-cooperation, and Luedeking–Piret acid → milk-buffering pH. The only observable is the **pH time series**; three explicit randomness layers (batch **variability**, optional process-noise SDE, measurement **uncertainty**) plus a product **fingerprint** + distance for strain-replacement optimization. |
+| | `models/benchtop/` | Four **simple benchtop systems** for practising DoE where the mechanism is one or two equations: **pipe pressure drop** (Hagen–Poiseuille / Darcy–Weisbach), **falling-ball viscometer** (Stokes + wall & inertia corrections), **yogurt back-extrusion** (Herschel–Bulkley probe rheometry), and **methyl-acetate hydrolysis** (reversible acid-catalysed kinetics). Each foregrounds a different response shape — power law, calibration, threshold, kinetics. |
 | **Virtual experiments** | `perturbation.py` | Turns model output into realistic measurements: multiplicative + additive noise, drift, and calibration bias, plus lognormal batch-to-batch parameter jitter. |
 | **Classical DoE** | `doe/factorial.py` | 2-level full-factorial designs with center points and randomised run order; a harness to run any design against the virtual lab. |
 | | `doe/analysis.py` | OLS response-surface fitting with Type-II ANOVA (via `statsmodels`) and derivation of **Proven Acceptable Ranges (PARs)**. |
@@ -114,6 +115,7 @@ Each phase of the workflow has a self-contained notebook (`uv run jupyter lab`):
 | 1.6 — Multi-mode chromatography | `notebooks/06_chromatography_modes.ipynb` | `models/chromatography` (modes, gradients, resolution) |
 | 1.7 — Milk fermentation (yogurt) | `notebooks/07_fermentation_doe.ipynb` | `models/fermentation` (strains, variability, fingerprint matching) |
 | 2.x — Covering-array strain screening | `notebooks/08_covering_array_strain_screening.ipynb` | `doe/covering`, `doe/importance` (RF + XGBoost), `models/fermentation` |
+| 4 — Benchtop DoE sandbox | `notebooks/09_benchtop_doe.ipynb` | `models/benchtop`, `doe/factorial`, `doe/analysis`, `doe/lhs` |
 
 ---
 

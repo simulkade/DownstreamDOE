@@ -77,3 +77,26 @@ else
     --title "$TITLE" --notes "$NOTES"
 fi
 echo ">> Done: release $TAG carries monograph.pdf + monograph.html"
+
+# --- 5. Publish the HTML page to GitHub Pages (gh-pages branch) ---------------
+# The release asset is served as an attachment (it downloads); GitHub Pages
+# serves the same page as text/html so it opens in the browser. We keep a single
+# orphan commit on gh-pages (force-pushed each release) to avoid repo bloat.
+if [[ "${PAGES:-1}" != "0" ]]; then
+  echo ">> Publishing HTML to GitHub Pages (gh-pages) ..."
+  WT="$(mktemp -d)"
+  git -C "$ROOT_DIR" worktree add --force --detach "$WT" >/dev/null
+  (
+    cd "$WT"
+    git checkout --orphan gh-pages-tmp >/dev/null 2>&1
+    git rm -rf . >/dev/null 2>&1 || true
+    cp -f "$REL_DIR/monograph.html" index.html
+    touch .nojekyll   # skip Jekyll so the raw HTML is served verbatim
+    git add -A
+    git commit -q -m "Publish monograph HTML ($TAG)"
+    git push -q --force origin gh-pages-tmp:gh-pages
+  )
+  git -C "$ROOT_DIR" worktree remove --force "$WT"
+  git -C "$ROOT_DIR" branch -D gh-pages-tmp >/dev/null 2>&1 || true
+  echo ">> Pages updated: https://simulkade.github.io/DownstreamDOE/"
+fi
